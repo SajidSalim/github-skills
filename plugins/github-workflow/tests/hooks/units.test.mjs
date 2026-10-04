@@ -135,6 +135,36 @@ describe("findGhTarget", () => {
   test("ignores an unrelated command", () => {
     assert.equal(findGhTarget(`git log --oneline`), null);
   });
+
+  test("finds gh inside $(...), backticks and a subshell, with clean args", () => {
+    const want = ["--title", "t", "--body", "a b"];
+    assert.deepEqual(findGhTarget(`URL=$(gh pr create --title t --body "a b")`).args, want);
+    assert.deepEqual(findGhTarget(`echo "$(gh pr create --title t --body "a b")"`).args, want);
+    assert.deepEqual(findGhTarget("URL=`gh pr create --title t --body \"a b\"`").args, want);
+    assert.deepEqual(findGhTarget(`(gh pr create --title t --body "a b") && echo ok`).args, want);
+    assert.deepEqual(findGhTarget(`(gh pr create --title "a)" --body "")`).args, ["--title", "a)", "--body", ""]);
+  });
+
+  test("never inside single quotes", () => {
+    assert.equal(findGhTarget(`echo '$(gh pr create --body x)'`), null);
+  });
+
+  test("moves -R before the action to the end of the args", () => {
+    const f = findGhTarget(`gh pr -R acme/other edit 7 --add-label x`);
+    assert.equal(f.action, "edit");
+    assert.deepEqual(f.args, ["7", "--add-label", "x", "-R", "acme/other"]);
+  });
+
+  test("with a cwd, the directory gh runs in", () => {
+    const cwd = temp("dir");
+    assert.equal(findGhTarget(`gh pr create`, cwd).dir, resolve(cwd));
+    assert.equal(findGhTarget(`cd sub && gh pr create`, cwd).dir, resolve(cwd, "sub"));
+    assert.equal(findGhTarget(`(cd sub && gh pr create -b x)`, cwd).dir, resolve(cwd, "sub"));
+    assert.equal(findGhTarget(`(cd sub); gh pr create`, cwd).dir, resolve(cwd));
+    assert.equal(findGhTarget(`URL=$(cd sub && gh pr create)`, cwd).dir, resolve(cwd, "sub"));
+    assert.equal(findGhTarget(`cd "$X" && gh pr create`, cwd).dir, null);
+    assert.equal(findGhTarget(`gh pr create`).dir, undefined);
+  });
 });
 
 // Regression: this hook blocked its own commit. The commit message quoted the words
@@ -286,6 +316,10 @@ describe("argValue", () => {
   });
   test("returns null when absent", () => {
     assert.equal(argValue(["--title", "x"], ["--body"]), null);
+  });
+  test("reads an attached short form", () => {
+    assert.equal(argValue(["-bsome text"], ["--body", "-b"]), "some text");
+    assert.equal(argValue(["-Bmain"], ["--body", "-b"]), null, "case matters");
   });
 });
 

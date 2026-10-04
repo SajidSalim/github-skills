@@ -356,50 +356,248 @@ function writesIn(toks) {
  *
  * Returns its kind, action and own args; `expands`, parallel to args, true where the shell
  * expands that argument; `line` and `endLine`, the lines of `cmd` the gh command spans (a
- * `--body "$(cat <<'EOF'` heredoc opens inside that range); and `writes`, the files the command
- * writes by redirect or `tee` before gh runs.
+ * `--body "$(cat <<'EOF'` heredoc opens inside that range); `at` and `end`, its offsets in the
+ * scanned text (heredocBodies' `at` is in the same terms); `piped`, the heredocs of a command
+ * piped into it; and `writes`, the files the command writes by redirect or `tee` before gh runs.
+ *
+ * Found where the shell runs it: as a command of its own, in a subshell `(gh ...)`, or inside a
+ * command substitution -- `URL=$(gh pr create ...)`, `echo "$(gh ...)"`, backticks -- but never
+ * in single quotes, which run nothing. A `-R`/`--repo` between the kind and the action
+ * (`gh pr -R o/r create`) is moved to the end of the args.
+ *
+ * With `cwd`, also `dir`: the directory gh runs in, following any `cd` before it in the same
+ * command, or null when that cannot be known (a `cd "$X"`).
  */
-export function findGhTarget(cmd) {
+export function findGhTarget(cmd, cwd) {
   const scan = scanHeredocs(cmd, markOf);
-  const toks = tokenize(scan.text);
   const lineAt = (offset) => scan.lineOf[(scan.text.slice(0, offset).match(/\n/g) || []).length];
+  const hit = ghIn(scan.text, 0, scan.text.length, []);
+  if (!hit) return null;
+
+  const { toks, i, t, kind, action, args, expands, last, levels } = hit;
+  const found = {
+    kind,
+    action,
+    args,
+    expands,
+    line: lineAt(t.at),
+    endLine: lineAt(last.end - 1),
+    at: t.at,
+    end: last.end,
+    piped: pipedHeredocs(toks, i),
+    writes: writesIn(tokenize(scan.text).filter((w) => w.end <= t.at)),
+  };
+  if (typeof cwd === "string" && cwd) {
+    let dir = resolve(cwd);
+    levels.forEach((level, k) => {
+      dir = dirAt(scan.text, level.from, level.to, k + 1 < levels.length ? levels[k + 1].from : t.at, dir);
+    });
+    found.dir = dir;
+  }
+  return found;
+}
+
+/**
+ * The first `gh issue|pr create|edit` in `text[from, to)`, in the order the shell meets it, looking
+ * inside command substitutions as it reaches them. `levels` are the ranges searched so far, outermost
+ * first.
+ */
+function ghIn(text, from, to, levels) {
+  const here = [...levels, { from, to }];
+  const toks = tokenize(text.slice(from, to)).map((t) => ({ ...t, at: t.at + from, end: t.end + from }));
+  const spans = substitutionSpans(text, from, to);
+  const tried = new Set();
 
   for (let i = 0; i < toks.length; i++) {
     const t = toks[i];
     if (t.op) continue;
 
-    const base = t.v.replace(/\\/g, "/").split("/").pop();
+    // A token inside a command substitution is that command's, and is judged there.
+    const span = spans.find((s) => t.at < s.to && t.end > s.from);
+    if (span) {
+      if (!tried.has(span)) {
+        tried.add(span);
+        const inner = ghIn(text, span.from, span.to, here);
+        if (inner) return inner;
+      }
+      continue;
+    }
+
+    // A subshell's `(` sticks to the word it opens: `(gh pr create ...)`.
+    const raw = text.slice(t.at, t.end);
+    const opens = /^\(*/.exec(raw)[0].length;
+    const word = t.v.slice(opens);
+    const base = word.replace(/\\/g, "/").split("/").pop();
     if (base !== "gh" && base !== "gh.exe") continue;
 
     const a = toks[i + 1];
-    const b = toks[i + 2];
     if (!a || a.op || (a.v !== "issue" && a.v !== "pr")) continue;
+    // gh takes -R/--repo before the action as well as after it.
+    let j = i + 2;
+    const moved = [];
+    while (j < toks.length && !toks[j].op) {
+      const v = toks[j].v;
+      if ((v === "-R" || v === "--repo") && toks[j + 1] && !toks[j + 1].op) {
+        moved.push(toks[j], toks[j + 1]);
+        j += 2;
+      } else if (v.startsWith("--repo=") || /^-R./.test(v)) {
+        moved.push(toks[j]);
+        j++;
+      } else break;
+    }
+    const b = toks[j];
     if (!b || b.op || (b.v !== "create" && b.v !== "edit")) continue;
 
     const args = [];
     const expands = [];
     let last = b;
-    for (let j = i + 3; j < toks.length && !toks[j].op; j++) {
-      last = toks[j];
-      if (MARK.test(toks[j].v)) continue; // a heredoc operator, not an argument
-      args.push(toks[j].v.replace(MARKS, " "));
-      expands.push(toks[j].expands);
+    let open = opens;
+    for (let k = j + 1; k < toks.length && !toks[k].op; k++) {
+      last = toks[k];
+      if (MARK.test(toks[k].v)) continue; // a heredoc operator, not an argument
+      let v = toks[k].v;
+      let rest = text.slice(toks[k].at, toks[k].end);
+      // The `)` closing the subshell gh opened sticks to its last word: `(gh pr create -b x)`.
+      if (open > 0 && /\)$/.test(rest)) {
+        const closes = Math.min(open, /\)*$/.exec(rest)[0].length);
+        v = v.slice(0, v.length - closes);
+        rest = rest.slice(0, rest.length - closes);
+        open -= closes;
+      }
+      if (rest !== "") {
+        args.push(v.replace(MARKS, " "));
+        expands.push(toks[k].expands);
+      }
+      if (opens > 0 && open === 0) break;
     }
-    return {
-      kind: a.v,
-      action: b.v,
-      args,
-      expands,
-      line: lineAt(t.at),
-      endLine: lineAt(last.end - 1),
-      at: t.at,
-      end: last.end,
-      piped: pipedHeredocs(toks, i),
-      writes: writesIn(toks.slice(0, i)),
-    };
+    for (const m of moved) {
+      args.push(m.v);
+      expands.push(m.expands);
+    }
+    return { toks, i, t, kind: a.v, action: b.v, args, expands, last, levels: here };
   }
 
+  for (const s of spans) {
+    if (tried.has(s)) continue;
+    const inner = ghIn(text, s.from, s.to, here);
+    if (inner) return inner;
+  }
   return null;
+}
+
+/**
+ * The command substitutions in `text[from, to)` the shell runs, outermost only, as the ranges of
+ * their contents: `$( ... )` and backticks, outside single quotes and escapes. An unterminated one
+ * ends the search.
+ */
+function substitutionSpans(text, from, to) {
+  const spans = [];
+  let dq = false;
+  for (let i = from; i < to; i++) {
+    const c = text[i];
+    if (c === "\\") {
+      i++;
+    } else if (c === "'" && !dq) {
+      const e = text.indexOf("'", i + 1);
+      if (e === -1 || e >= to) break;
+      i = e;
+    } else if (c === '"') {
+      dq = !dq;
+    } else if (c === "`") {
+      const e = closeBacktick(text, i + 1, to);
+      if (e === -1) break;
+      spans.push({ from: i + 1, to: e });
+      i = e;
+    } else if (c === "$" && text[i + 1] === "(") {
+      const e = closeParen(text, i + 2, to);
+      if (e === -1) break;
+      spans.push({ from: i + 2, to: e });
+      i = e;
+    }
+  }
+  return spans;
+}
+
+/** The index of the backtick closing one opened before `i`, or -1. */
+function closeBacktick(text, i, to) {
+  for (; i < to; i++) {
+    if (text[i] === "\\") i++;
+    else if (text[i] === "`") return i;
+  }
+  return -1;
+}
+
+/** The index of the `)` closing a `$(` or `(` opened before `i`, or -1; quotes inside are skipped. */
+function closeParen(text, i, to) {
+  let depth = 1;
+  for (; i < to; i++) {
+    const c = text[i];
+    if (c === "\\") {
+      i++;
+    } else if (c === "'") {
+      const e = text.indexOf("'", i + 1);
+      if (e === -1 || e >= to) return -1;
+      i = e;
+    } else if (c === '"') {
+      const e = closeDq(text, i + 1, to);
+      if (e === -1) return -1;
+      i = e;
+    } else if (c === "`") {
+      const e = closeBacktick(text, i + 1, to);
+      if (e === -1) return -1;
+      i = e;
+    } else if (c === "(") {
+      depth++;
+    } else if (c === ")" && --depth === 0) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+/** The index of the `"` closing a double-quoted string opened before `i`, or -1. */
+function closeDq(text, i, to) {
+  for (; i < to; i++) {
+    const c = text[i];
+    if (c === "\\") {
+      i++;
+    } else if (c === '"') {
+      return i;
+    } else if (c === "$" && text[i + 1] === "(") {
+      const e = closeParen(text, i + 2, to);
+      if (e === -1) return -1;
+      i = e;
+    } else if (c === "`") {
+      const e = closeBacktick(text, i + 1, to);
+      if (e === -1) return -1;
+      i = e;
+    }
+  }
+  return -1;
+}
+
+/**
+ * The directory the shell is in when it reaches offset `at` within `text[from, to)`, starting in
+ * `dir`: each `cd`/`pushd` before it followed, a subshell's undone when it closes, `popd` unknown.
+ * Null once it cannot be known.
+ */
+function dirAt(text, from, to, at, dir) {
+  const toks = tokenize(text.slice(from, to)).map((t) => ({ ...t, at: t.at + from, end: t.end + from }));
+  const saved = [];
+  for (const simple of simpleCommands(toks)) {
+    if (simple.length === 0) continue;
+    if (simple[0].at >= at) break;
+    const { words, opens, closes } = plainWords(simple, text);
+    for (let n = 0; n < opens; n++) saved.push(dir);
+    while (words.length > 0 && KEYWORDS.has(words[0].v)) words.shift();
+    const head = words[0]?.v;
+    if (head === "cd" || head === "pushd") dir = cdTarget(dir, words.slice(1));
+    else if (head === "popd") dir = null;
+    // A command that reaches past `at` is the one gh runs in: its own close has not happened yet.
+    if (simple.at(-1).end > at) break;
+    for (let n = 0; n < closes && saved.length > 0; n++) dir = saved.pop();
+  }
+  return dir;
 }
 
 /** The heredocs fed to the simple command piped into `toks[i]`'s: `cat <<'EOF' | gh ...`. */
@@ -412,18 +610,24 @@ function pipedHeredocs(toks, i) {
   return ids;
 }
 
-/** Where `--name X` or `--name=X` is, as {index, value} -- index of the value's token -- or null. */
+/**
+ * Where `--name X`, `--name=X` or, for a one-letter name, `-nX` is, as {index, value} -- index of
+ * the value's token -- or null.
+ */
 function argAt(args, names) {
   for (let i = 0; i < args.length; i++) {
     for (const n of names) {
       if (args[i] === n) return { index: i + 1, value: args[i + 1] ?? "" };
       if (args[i].startsWith(n + "=")) return { index: i, value: args[i].slice(n.length + 1) };
+      if (/^-[A-Za-z]$/.test(n) && args[i].length > 2 && args[i].startsWith(n)) {
+        return { index: i, value: args[i].slice(2) };
+      }
     }
   }
   return null;
 }
 
-/** Value of `--name X` or `--name=X`, or null when absent. */
+/** Value of `--name X`, `--name=X` or `-nX`, or null when absent. */
 export function argValue(args, names) {
   return argAt(args, names)?.value ?? null;
 }
@@ -1052,6 +1256,7 @@ function literalText(v) {
 
 /** The contents `--body-file file` will hold when gh reads it. */
 function bodyFile(file, cwd, heredocs, writes) {
+  if (cwd === null) return { skip: "body file in a directory the hook cannot place" };
   const native = nativePath(file);
   const keyOf = (p) => {
     const n = p === file ? native : nativePath(p);
@@ -1780,12 +1985,13 @@ function deployTouched(cwd, baseFlag, headFlag, globs) {
  * The gh gates: exit 2 on a block, else return the config warning (or null) for the caller to
  * pass on -- alone, or beside an ask from the git gates.
  */
-function preToolUse({ kind, action, args, cwd, context, adopted, gates, sources }) {
+function preToolUse({ kind, action, args, cwd, dir, context, adopted, gates, sources }) {
   const warning = context.error
     ? `github-workflow: ${slash(context.path)} is not valid (${context.error}) -- repo gates skipped; run /github-workflow:doctor`
     : null;
 
-  const body = resolveBody(args, cwd, sources);
+  // A body file is read where gh runs: after a `cd` in the same command, that directory.
+  const body = resolveBody(args, dir === undefined ? cwd : dir, sources);
 
   // Closing keywords act from PR descriptions (and default-branch commits), never from an
   // issue body, so issues are not checked here. Edits count: an edited body re-triggers it.
@@ -2229,7 +2435,7 @@ async function main() {
   // Decided first, acted on last: a block from the gh gates below wins over an ask.
   const reason = event === "PreToolUse" && command.includes("git") ? quietly(() => gitAsk(command, cwd, payload)) : null;
 
-  const found = command.includes("gh") ? findGhTarget(command) : null;
+  const found = command.includes("gh") ? findGhTarget(command, cwd) : null;
   if (!found) {
     if (reason) ask(reason);
     process.exit(0);

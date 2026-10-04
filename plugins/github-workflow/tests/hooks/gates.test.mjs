@@ -739,6 +739,63 @@ describe("PreToolUse — deploy gate, --head", { skip: !gitAvailable }, () => {
   });
 });
 
+// Ordinary command shapes that once reached no gh gate at all. A false block on everyday gh use is
+// worse than a miss, so each shape has its passing twin.
+describe("PreToolUse — command shapes", () => {
+  const NEG = `--title t --body "This does not close #12."`;
+  const OK = `--title t --body "Refs #12."`;
+
+  test("a PR URL captured with $(...) is still judged", () => {
+    assert.equal(runHook(pre(`URL=$(gh pr create ${NEG})`, temp("guest"))).status, 2);
+    assert.equal(runHook(pre(`URL=$(gh pr create ${OK}) && echo "$URL"`, temp("guest"))).status, 0);
+  });
+
+  test("so is one inside a double-quoted $(...), backticks or a subshell", () => {
+    for (const shape of [
+      `echo "$(gh pr create ${NEG})"`,
+      `URL=\`gh pr create ${NEG}\``,
+      `(gh pr create ${NEG})`,
+      `(cd . && gh pr create ${NEG})`,
+    ]) {
+      assert.equal(runHook(pre(shape, temp("guest"))).status, 2, shape);
+    }
+    for (const shape of [`echo "$(gh pr create ${OK})"`, `(gh pr create ${OK})`, `echo "$(gh pr view 1)"`]) {
+      assert.equal(runHook(pre(shape, temp("guest"))).status, 0, shape);
+    }
+  });
+
+  test("a single-quoted mention of $(gh pr create ...) runs nothing and is not judged", () => {
+    const cmd = `git commit -m 'docs: never write $(gh pr create --body "does not close #1")'`;
+    assert.equal(runHook(pre(cmd, temp("guest"))).status, 0);
+  });
+
+  test("-R before the action is still that command, and names the repository", () => {
+    assert.equal(runHook(pre(`gh pr -R acme/other create ${NEG}`, temp("guest"))).status, 2);
+    assert.equal(runHook(pre(`gh issue --repo acme/other create --title x --body plain`, repoDir(ADOPTED))).status, 0);
+    assert.equal(runHook(pre(`gh issue -R acme/shop create --title x --body plain`, repoDir(ADOPTED))).status, 2);
+  });
+
+  test("an attached short flag carries its value", () => {
+    assert.equal(runHook(pre(`gh pr create -t t -b'This does not close #12.'`, temp("guest"))).status, 2);
+    assert.equal(runHook(pre(`gh pr create -t t -b'Refs #12.'`, temp("guest"))).status, 0);
+  });
+
+  test("a --body-file after cd is read from that directory", () => {
+    const dir = temp("guest");
+    mkdirSync(join(dir, "sub"));
+    writeFileSync(join(dir, "pr.md"), "Refs #12\n");
+    writeFileSync(join(dir, "sub", "pr.md"), "This does not close #12.\n");
+    assert.equal(runHook(pre(`cd sub && gh pr create --title t --body-file pr.md`, dir)).status, 2);
+    assert.equal(runHook(pre(`(cd sub) && gh pr create --title t --body-file pr.md`, dir)).status, 0);
+  });
+
+  test("a --body-file after a cd the hook cannot follow is skipped, never read from the wrong place", () => {
+    const dir = temp("guest");
+    writeFileSync(join(dir, "pr.md"), "This does not close #12.\n");
+    assert.equal(runHook(pre(`cd "$WORK" && gh pr create --title t --body-file pr.md`, dir)).status, 0);
+  });
+});
+
 describe("modes", () => {
   test("guest mode still blocks a negated closing keyword on a PR", () => {
     const r = runHook(pre(NEGATED_PR, temp("guest")));
