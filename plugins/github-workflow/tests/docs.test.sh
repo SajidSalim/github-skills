@@ -286,6 +286,13 @@ test_setup_finds_existing_templates_at_other_paths() {
   assert_contains "$doc" "blank_issues_enabled: false"
 }
 
+# The Security contact link tells reporters not to open a public issue, so it must lead somewhere.
+test_setup_checks_private_vulnerability_reporting_before_keeping_the_security_link() {
+  assert_contains "$(cat "$PLUGIN_ROOT/skills/setup/SKILL.md")" "private-vulnerability-reporting"
+  assert_contains "$(cat "$PLUGIN_ROOT/skills/setup/SKILL.md")" "/security/policy"
+  assert_contains "$(cat "$_ASSETS/ISSUE_TEMPLATE/config.yml")" "private-vulnerability-reporting"
+}
+
 test_setup_never_deletes_labels_itself() {
   local doc; doc=$(cat "$PLUGIN_ROOT/skills/setup/SKILL.md")
   # deleting a label strips it from every issue carrying it: the skill prints the loop, the operator runs it
