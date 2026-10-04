@@ -247,7 +247,7 @@ gh issue list --state closed --limit 50 --json number,title,closedAt
 gh search issues --assignee "@me" --state open
 
 # Check the whole backlog against the label taxonomy
-bash "<skill-dir>/scripts/lint-issue-labels.sh" --all --state all
+bash "<skill-dir>/scripts/lint-issue-labels.sh" --all --state all --limit 5000
 ```
 
 ## CRLF — the trap on Windows

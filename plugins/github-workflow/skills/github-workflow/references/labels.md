@@ -136,7 +136,7 @@ human opening the issue and reading the thread. A close missing one turns every 
 into an interruption for the operator.
 
 ```bash
-bash "<skill-dir>/scripts/lint-issue-labels.sh" --all --state all    # flags closes with no resolution:
+bash "<skill-dir>/scripts/lint-issue-labels.sh" --all --state all --limit 5000    # flags closes with no resolution:
 ```
 
 ---

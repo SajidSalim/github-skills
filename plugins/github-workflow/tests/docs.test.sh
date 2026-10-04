@@ -63,6 +63,14 @@ test_guest_mode_asks_before_self_assign_and_issue_develop() {
   assert_contains "$row" "ask first"
 }
 
+# `--all` lists at most `--limit` issues, so neither the skill nor the backlog audit the references
+# recommend may present it as the whole backlog.
+test_the_backlog_audit_is_sized_by_its_limit() {
+  assert_contains "$(grep 'scripts/lint-issue-labels.sh' "$_MAIN")" 'stops at `--limit`'
+  local hits; hits=$(grep -h -e '--all --state all' "$_SKILL"/references/*.md | grep -v -e '--limit' || true)
+  [[ -z "$hits" ]] || { printf 'backlog audit without --limit:\n%s\n' "$hits" >&2; return 1; }
+}
+
 test_no_reference_points_into_a_dot_claude_directory() {
   local hits; hits=$(grep -n -H -E '\.claude/(hooks|skills)/' "$_SKILL"/references/*.md || true)
   [[ -z "$hits" ]] || { printf '%s\n' "$hits" >&2; return 1; }
