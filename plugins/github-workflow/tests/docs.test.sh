@@ -21,8 +21,8 @@ test_references_run_the_plugins_scripts() {
 
 # A plugin path can hold a space (`/c/Users/Jane Doe/...`); SKILL.md quotes every script path,
 # and an agent substituting `<skill-dir>` literally needs the references to do the same.
-test_references_quote_the_skill_dir_in_commands() {
-  local hits; hits=$(grep -n -H -E '(bash|node) <skill-dir>' "$_SKILL"/references/*.md || true)
+test_the_skills_quote_the_skill_dir_in_commands() {
+  local hits; hits=$(grep -r -n -E '(bash|node) <skill-dir>' "$PLUGIN_ROOT/skills" || true)
   [[ -z "$hits" ]] || { printf 'unquoted <skill-dir> in a command:\n%s\n' "$hits" >&2; return 1; }
 }
 
