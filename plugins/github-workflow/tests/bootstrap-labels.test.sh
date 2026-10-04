@@ -74,6 +74,35 @@ test_an_explicit_config_path_is_used() {
   assert_contains "$RUN_OUT" "area:mobile"
 }
 
+# The checkout's config describes the checkout's repository. Applied to another --repo, it
+# would hand that repository this one's areas and board mode, and the hook would treat the
+# same command as guest.
+test_a_discovered_config_for_another_repo_is_ignored_with_a_note() {
+  _adopted_repo '{"version":1,"repo":"acme/shop","inFlightState":"board","areas":["checkout"]}'
+  _dry --repo acme/other-repo
+  assert_eq 0 "$RUN_STATUS"
+  assert_contains "$RUN_OUT" "describes acme/shop, not acme/other-repo -- ignoring it (pass --config to use it)"
+  assert_not_contains "$RUN_OUT" "board mode"
+  assert_not_contains "$RUN_OUT" "area:checkout"
+  assert_contains "$RUN_OUT" "area:api" "the generic set, as if no config existed"
+  assert_contains "$RUN_OUT" "status:in-progress"
+}
+
+test_a_discovered_config_for_the_same_repo_in_another_case_is_used() {
+  _adopted_repo '{"version":1,"repo":"acme/shop","areas":["checkout"]}'
+  _dry --repo ACME/Shop
+  assert_contains "$RUN_OUT" "area:checkout"
+  assert_not_contains "$RUN_OUT" "ignoring it"
+}
+
+test_an_explicit_config_is_used_for_any_repo() {
+  cd "$TEST_TMP"
+  printf '{"version":1,"repo":"acme/shop","areas":["mobile"]}' >"$TEST_TMP/cfg.json"
+  _dry --repo acme/other-repo --config "$TEST_TMP/cfg.json"
+  assert_contains "$RUN_OUT" "area:mobile" "--config is the operator saying which settings to use"
+  assert_not_contains "$RUN_OUT" "ignoring it"
+}
+
 test_labels_only_mode_creates_all_five_status_labels() {
   cd "$TEST_TMP"
   _dry

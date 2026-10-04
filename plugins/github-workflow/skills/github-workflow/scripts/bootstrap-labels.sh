@@ -17,7 +17,8 @@
 #
 # SETTINGS. Without --config, the repository's .github/github-workflow.json is read when it
 # exists: `areas` becomes the area: set and `"inFlightState": "board"` implies --board. Flags
-# beat the config. With neither, the generic areas are used in labels-only mode.
+# beat the config. With neither, the generic areas are used in labels-only mode. A found
+# config whose `repo` names another repository than --repo is ignored, with a note.
 #
 # BOARD MODE. A repo whose GitHub Projects board owns in-flight state must not also carry
 # status:in-progress and status:needs-review -- two writers for one fact is how state goes
@@ -52,12 +53,16 @@ done
 
 # ---------------------------------------------------------------- settings
 
+DISCOVERED=false
 if [[ -z "$CONFIG" ]]; then
   root=$(git rev-parse --show-toplevel 2>/dev/null || true)
   if [[ -n "$root" && -f "$root/.github/github-workflow.json" ]]; then
     CONFIG="$root/.github/github-workflow.json"
+    DISCOVERED=true
   fi
 fi
+
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
 CONFIG_AREAS=""
 if [[ -n "$CONFIG" ]]; then
@@ -69,6 +74,16 @@ if [[ -n "$CONFIG" ]]; then
   if ! jq -e 'type == "object" and .version == 1 and ((.areas // []) | type == "array")' >/dev/null 2>&1 <<<"$json"; then
     echo "not a valid config (a JSON object with \"version\": 1 and an \"areas\" array): $CONFIG -- fix it, or run /github-workflow:doctor" >&2
     exit 2
+  fi
+  # A config found in this checkout describes this checkout's repository. Another --repo gets
+  # none of its settings, matching the hook, which treats a mismatched --repo as guest.
+  # --config is the operator naming the settings outright, so it applies to any --repo.
+  if $DISCOVERED && [[ -n "$REPO" ]]; then
+    cfg_repo=$(jq -r '.repo // "" | tostring' <<<"$json" | tr -d '\r')
+    if [[ -n "$cfg_repo" && "$(lower "$cfg_repo")" != "$(lower "$REPO")" ]]; then
+      echo "note: $CONFIG describes $cfg_repo, not $REPO -- ignoring it (pass --config to use it)" >&2
+      json='{"version":1}'
+    fi
   fi
   CONFIG_AREAS=$(jq -r '(.areas // []) | map(tostring) | join(",")' <<<"$json" | tr -d '\r')
   if [[ "$(jq -r '.inFlightState // "labels"' <<<"$json" | tr -d '\r')" == "board" ]]; then
