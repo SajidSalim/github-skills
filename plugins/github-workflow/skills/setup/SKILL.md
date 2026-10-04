@@ -88,7 +88,7 @@ root, in `docs/` or in `.github/`, or a `PULL_REQUEST_TEMPLATE/` directory there
 ```bash
 git ls-files -co --exclude-standard \
   | grep -iE '^(docs/|\.github/)?(pull_request_template|issue_template)(\.[a-z]+$|/)' \
-  | grep -vE '^\.github/(pull_request_template\.md|ISSUE_TEMPLATE/([1-4]-[a-z]+|config)\.yml)$'
+  | grep -vE '^\.github/(pull_request_template\.md|ISSUE_TEMPLATE/(1-bug|2-feature|3-enhancement|4-chore|config)\.yml)$'
 ```
 
 A hit that differs from a table path **only in letter case** (`.github/PULL_REQUEST_TEMPLATE.md`)
@@ -98,9 +98,9 @@ is the same file on Windows and macOS. It is that table row's existing file: sho
 
 For every other hit, ask whether the new files **replace** it (`git rm` it in step 9), **sit
 beside** it, or are **skipped**. Two PR description files, or two bug forms in the chooser, is the
-outcome to avoid. Say too that the installed `config.yml` sets `blank_issues_enabled: false`, so the chooser
-stops offering a blank issue, and what happens to its Security contact link (step 1): kept,
-pointed at the security policy, or dropped.
+outcome to avoid. Say too that the installed `config.yml` sets `blank_issues_enabled: false`, so
+the chooser stops offering a blank issue, and what happens to its Security contact link (step 1):
+kept, pointed at the security policy, or dropped.
 
 On a **re-run** (`.github/github-workflow.json` already exists), write the proposed config (the
 shape in step 6.2) to a temporary file outside the repository, and pass `--config <that file>`

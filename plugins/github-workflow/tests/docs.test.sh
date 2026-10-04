@@ -353,11 +353,14 @@ test_setup_template_search_leaves_out_its_own_install_paths() {
     .github/pull_request_template.md .github/ISSUE_TEMPLATE/1-bug.yml .github/ISSUE_TEMPLATE/4-chore.yml \
     .github/ISSUE_TEMPLATE/config.yml .github/PULL_REQUEST_TEMPLATE.md docs/pull_request_template.md \
     .github/PULL_REQUEST_TEMPLATE/a.md .github/ISSUE_TEMPLATE/bug_report.yml src/pull_request_template.md \
+    .github/ISSUE_TEMPLATE/2-bug.yml \
     | eval "$filters")
+  # 2-bug.yml is the repository's own form, not setup's 1-bug.yml: it must get the question.
   assert_eq ".github/PULL_REQUEST_TEMPLATE.md
 docs/pull_request_template.md
 .github/PULL_REQUEST_TEMPLATE/a.md
-.github/ISSUE_TEMPLATE/bug_report.yml" "$out"
+.github/ISSUE_TEMPLATE/bug_report.yml
+.github/ISSUE_TEMPLATE/2-bug.yml" "$out"
 }
 
 # The Security contact link tells reporters not to open a public issue, so it must lead somewhere.
