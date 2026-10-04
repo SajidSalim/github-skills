@@ -525,6 +525,12 @@ describe("changedFiles", () => {
   test("an empty base is unknown, not an empty diff", { skip: !gitAvailable }, () => {
     assert.equal(changedFiles(seededRepo(), ""), null);
   });
+
+  test("an option-like head is refused too", { skip: !gitAvailable }, () => {
+    const dir = seededRepo();
+    assert.equal(changedFiles(dir, "main", "--output=y"), null);
+    assert.equal(existsSync(join(dir, "y")), false);
+  });
 });
 
 describe("resolveBody", () => {

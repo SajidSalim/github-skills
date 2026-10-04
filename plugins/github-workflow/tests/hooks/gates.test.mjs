@@ -678,6 +678,67 @@ Deploy impact: none`;
   });
 });
 
+// `gh pr create --head B` opens a PR from B whatever is checked out: the diff is B's.
+describe("PreToolUse — deploy gate, --head", { skip: !gitAvailable }, () => {
+  let repo;
+  const git = (...args) => spawnSync("git", args, { cwd: repo, encoding: "utf8" });
+  const branch = (name, file) => {
+    git("checkout", "-q", "-b", name, "main");
+    mkdirSync(join(repo, dirname(file)), { recursive: true });
+    writeFileSync(join(repo, file), "x\n");
+    git("add", "-A");
+    git("commit", "-q", "-m", name, "--no-verify");
+  };
+
+  before(() => {
+    repo = temp("deploy-head");
+    git("init", "-q", "-b", "main");
+    git("config", "user.email", "t@example.com");
+    git("config", "user.name", "t");
+    git("config", "commit.gpgsign", "false");
+    mkdirSync(join(repo, ".github"));
+    writeFileSync(
+      join(repo, ".github", "github-workflow.json"),
+      JSON.stringify({ ...ADOPTED, gates: { deployImpact: { paths: ["migrations/**"] } } }),
+    );
+    writeFileSync(join(repo, "README.md"), "seed\n");
+    git("add", "-A");
+    git("commit", "-q", "-m", "seed", "--no-verify");
+    branch("mig", "migrations/1.sql");
+    branch("plain", "src/a.txt");
+  });
+
+  const create = (head) => `gh pr create --title t --body x --base main --head ${head}`;
+
+  test("a PR from a plain branch passes while a migration branch is checked out", () => {
+    git("checkout", "-q", "mig");
+    assert.equal(runHook(pre(create("plain"), repo)).status, 0);
+  });
+
+  test("a PR from the migration branch is blocked while a plain branch is checked out", () => {
+    git("checkout", "-q", "plain");
+    const r = runHook(pre(create("mig"), repo));
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /migrations\/1\.sql/);
+  });
+
+  test("-H is the short form", () => {
+    git("checkout", "-q", "plain");
+    assert.equal(runHook(pre(`gh pr create --title t --body x --base main -H mig`, repo)).status, 2);
+  });
+
+  test("a fork's owner:branch head cannot be diffed here, so the gate stands aside", () => {
+    git("checkout", "-q", "mig");
+    assert.equal(runHook(pre(create("someone:plain"), repo)).status, 0);
+  });
+
+  test("an option-like --head never reaches git", () => {
+    git("checkout", "-q", "mig");
+    assert.equal(runHook(pre(create(`"--output=y"`), repo)).status, 0);
+    assert.equal(existsSync(join(repo, "y")), false);
+  });
+});
+
 describe("modes", () => {
   test("guest mode still blocks a negated closing keyword on a PR", () => {
     const r = runHook(pre(NEGATED_PR, temp("guest")));

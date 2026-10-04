@@ -1044,13 +1044,15 @@ export function hasDeployImpact(body) {
  *
  * A base that is empty or starts with `-` is unknown too. It comes from the command the model
  * writes, and git would parse `--output=FILE...HEAD` as an option: it writes a file and reports
- * an empty diff.
+ * an empty diff. `head`, the branch the PR is opened from, defaults to HEAD and is held to the
+ * same rule.
  */
-export function changedFiles(cwd, base) {
-  if (typeof base !== "string" || base === "" || base.startsWith("-")) return null;
+export function changedFiles(cwd, base, head = "HEAD") {
+  const usable = (ref) => typeof ref === "string" && ref !== "" && !ref.startsWith("-");
+  if (!usable(base) || !usable(head)) return null;
   const git = resolveExecutable("git");
   if (!git) return null;
-  const run = spawnSync(git, ["diff", "--name-only", `${base}...HEAD`], {
+  const run = spawnSync(git, ["diff", "--name-only", `${base}...${head}`, "--"], {
     cwd,
     encoding: "utf8",
     timeout: 5_000,
@@ -1620,11 +1622,24 @@ function taxonomyMessage(kind, n, report) {
 
 // ---------------------------------------------------------------- the gates
 
-/** Files under a deploy glob on this branch, or [] when git cannot say -- unknown never blocks. */
-function deployTouched(cwd, baseFlag, globs) {
-  for (const base of deployBases(cwd, baseFlag)) {
-    const files = changedFiles(cwd, base);
-    if (files !== null) return deployTriggersIn(files, globs);
+/**
+ * The refs to diff as the PR's head, best first: HEAD without --head; with it, the pushed branch
+ * and then the local one. None -- the gate stands aside -- for a head this checkout cannot diff:
+ * empty, option-like, or a fork's `owner:branch`.
+ */
+export function deployHeads(headFlag) {
+  if (headFlag === null || headFlag === undefined) return ["HEAD"];
+  if (headFlag === "" || headFlag.startsWith("-") || headFlag.includes(":")) return [];
+  return [`origin/${headFlag}`, headFlag];
+}
+
+/** Files under a deploy glob on the PR's branch, or [] when git cannot say -- unknown never blocks. */
+function deployTouched(cwd, baseFlag, headFlag, globs) {
+  for (const head of deployHeads(headFlag)) {
+    for (const base of deployBases(cwd, baseFlag)) {
+      const files = changedFiles(cwd, base, head);
+      if (files !== null) return deployTriggersIn(files, globs);
+    }
   }
   return [];
 }
@@ -1654,7 +1669,7 @@ function preToolUse({ kind, action, args, cwd, context, adopted, gates, sources 
     const deploy = gates.deployImpact;
     const globs = Array.isArray(deploy?.paths) ? deploy.paths : [];
     if (globs.length > 0 && !hasDeployImpact(body.text)) {
-      const touched = deployTouched(cwd, argValue(args, ["--base", "-B"]), globs);
+      const touched = deployTouched(cwd, argValue(args, ["--base", "-B"]), argValue(args, ["--head", "-H"]), globs);
       if (touched.length > 0) block(deployMessage(touched, deploy.doc));
     }
   }
