@@ -492,7 +492,7 @@ to one vendor's tooling.
 | [assets/ISSUE_TEMPLATE/](assets/ISSUE_TEMPLATE/) + [assets/pull_request_template.md](assets/pull_request_template.md) | What `/github-workflow:setup` installs into a repo |
 | [assets/GITHUB_WORKFLOW.template.md](assets/GITHUB_WORKFLOW.template.md) | Writing a repo's overlay |
 | [scripts/find-duplicates.sh](scripts/find-duplicates.sh) | Running the §4.0 duplicate check: `bash "${CLAUDE_SKILL_DIR}/scripts/find-duplicates.sh" "<title>"` |
-| [scripts/lint-issue-labels.sh](scripts/lint-issue-labels.sh) | Checking issues against the taxonomy — one, or the whole backlog with `--all`: `bash "${CLAUDE_SKILL_DIR}/scripts/lint-issue-labels.sh" <n> [--pr]` |
+| [scripts/lint-issue-labels.sh](scripts/lint-issue-labels.sh) | Checking issues against the taxonomy — one, or the backlog with `--all` (stops at `--limit`, default 500, and says so): `bash "${CLAUDE_SKILL_DIR}/scripts/lint-issue-labels.sh" <n> [--pr]` |
 | [scripts/bootstrap-labels.sh](scripts/bootstrap-labels.sh) | The repo's labels do not exist yet: `bash "${CLAUDE_SKILL_DIR}/scripts/bootstrap-labels.sh" --dry-run` |
 
 Run every script as `bash <path>`, never `./`. They need `gh` and the real `jq`: the duplicate and
