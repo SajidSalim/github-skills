@@ -8,9 +8,10 @@ and on humans. If you are an agent and you have read this file, follow it withou
 
 This file is the **delta**: what is true of *this* repository. The workflow itself — the ten
 rules, the duplicate search, claiming, branching, PRs, closing — is the `github-workflow` skill
-(Claude Code plugin `github-workflow`; plain markdown, readable by any agent). On a GitHub question
-this file wins over the skill. The repository's engineering rules (`AGENTS.md`, `CONTRIBUTING.md`)
-win over both.
+(Claude Code plugin `github-workflow`; plain markdown, readable by any agent at
+https://github.com/SajidSalim/github-skills/tree/main/plugins/github-workflow/skills/github-workflow).
+On a GitHub question this file wins over the skill. The repository's engineering rules
+(`AGENTS.md`, `CONTRIBUTING.md`) win over both.
 
 ## Repo constants
 

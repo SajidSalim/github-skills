@@ -158,6 +158,15 @@ test_primary_skill_keeps_the_ten_rules() {
   done
 }
 
+# Codex, Cursor and Copilot cannot reach the plugin directory, so the pointers name the public
+# copy of the skill; and setup offers the overlay separately, so the snippet cannot assume it.
+test_the_agents_pointers_reach_the_skill_without_the_plugin() {
+  local url="https://github.com/SajidSalim/github-skills/tree/main/plugins/github-workflow/skills/github-workflow"
+  assert_contains "$(cat "$_ASSETS/AGENTS.snippet.md")" "$url"
+  assert_contains "$(cat "$_ASSETS/GITHUB_WORKFLOW.template.md")" "$url"
+  assert_contains "$(cat "$_ASSETS/AGENTS.snippet.md")" '`.github/GITHUB_WORKFLOW.md`, if present'
+}
+
 # A coding subagent may never load the skill, so the branch and discard rules also travel in the
 # AGENTS.md snippet; and §5.4 shows how to branch without switching a checkout that is not yours.
 test_the_branch_and_discard_rules_reach_every_agent() {
