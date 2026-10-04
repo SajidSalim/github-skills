@@ -276,6 +276,16 @@ test_setup_and_doctor_see_that_the_agents_pointer_reaches_claude() {
   assert_contains "$(cat "$PLUGIN_ROOT/skills/doctor/SKILL.md")" "CLAUDE.md does not import AGENTS.md"
 }
 
+# GitHub reads PR and issue templates from more places than the files setup installs, so a
+# repository can end up with two PR description files or two bug forms.
+test_setup_finds_existing_templates_at_other_paths() {
+  local doc; doc=$(cat "$PLUGIN_ROOT/skills/setup/SKILL.md")
+  assert_contains "$doc" "PULL_REQUEST_TEMPLATE/"
+  assert_contains "$doc" ".github/ISSUE_TEMPLATE/"
+  assert_contains "$doc" "**replace**"
+  assert_contains "$doc" "blank_issues_enabled: false"
+}
+
 test_setup_never_deletes_labels_itself() {
   local doc; doc=$(cat "$PLUGIN_ROOT/skills/setup/SKILL.md")
   # deleting a label strips it from every issue carrying it: the skill prints the loop, the operator runs it
