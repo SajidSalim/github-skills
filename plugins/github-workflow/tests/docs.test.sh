@@ -33,6 +33,10 @@ test_destructive_examples_carry_an_ask_first_warning() {
   assert_contains "$board" "**Only on the operator's explicit instruction.**"
   assert_contains "$board" "<every current option, verbatim, plus the new one"
   assert_not_contains "$board" '{name: \"P0\"'
+  assert_contains "$board" "color: <its existing colour>"
+  # every `gh auth refresh` the references show is marked as the operator's to run
+  local hits; hits=$(grep -h 'gh auth refresh' "$_SKILL"/references/*.md | grep -v -i 'operator' || true)
+  [[ -z "$hits" ]] || { printf 'gh auth refresh without the operator caveat:\n%s\n' "$hits" >&2; return 1; }
   assert_contains "$(grep 'gh label delete "wontfix"' "$_SKILL/references/gh-commands.md")" "the operator's call, never yours"
 }
 

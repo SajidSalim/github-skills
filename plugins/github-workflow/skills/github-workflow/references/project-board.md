@@ -340,8 +340,8 @@ much of this an agent has to do. Prefer configuring those over scripting the sam
 hook asks first: the plugin's discard gate covers git commands, not GraphQL mutations.
 
 `updateProjectV2Field` needs **`project`** write scope — `read:project` is not enough and the failure
-is an explicit `INSUFFICIENT_SCOPES`, not a silent no-op. `gh auth refresh -s project` grants it, and
-note it **replaces** `read:project` in the scope list rather than adding to it; `project` is a superset,
+is an explicit `INSUFFICIENT_SCOPES`, not a silent no-op. `gh auth refresh -s project`, which the operator
+runs, grants it; note it **replaces** `read:project` in the scope list rather than adding to it; `project` is a superset,
 so nothing is lost.
 
 **The mutation replaces the whole option set; it does not append.** List every option you want to keep
@@ -371,7 +371,7 @@ mutation {
   updateProjectV2Field(input: {
     fieldId: \"$FIELD_ID\"
     singleSelectOptions: [
-      <every current option, verbatim, plus the new one — each {name: \"…\", color: RED, description: \"…\"}>
+      <every current option, verbatim, plus the new one — each {name: \"…\", color: <its existing colour>, description: \"…\"}>
     ]
   }) { projectV2Field { ... on ProjectV2SingleSelectField { name options { name } } } }
 }"

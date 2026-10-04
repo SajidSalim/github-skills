@@ -310,7 +310,7 @@ cp "$LOCALAPPDATA/Microsoft/WinGet/Packages/jqlang.jq_"*/jq.exe ~/bin/   # ~/bin
 | Assignment appears to do nothing | Account lacks write access, or the assignee is not a repo collaborator |
 | Issue not closed after PR merge | PR targeted a non-default branch, or the keyword lacked its own `closes` |
 | Markdown mangled in a comment | Used `--body` for multi-line. Use `--body-file` |
-| `gh: Not Found (HTTP 404)` on a project command | Wrong `--owner` (user vs org), or the token lacks the scope: `gh auth refresh -s read:project` to read, `-s project` to move cards |
+| `gh: Not Found (HTTP 404)` on a project command | Wrong `--owner` (user vs org), or the token lacks the scope: `gh auth refresh -s read:project` to read, `-s project` to move cards. Both are interactive and change the token's scopes: ask the operator to run them |
 | `missing required scopes [read:project]` | The token cannot read boards. **This is not "no board"** — do not fall back to labels-only on it. Refresh the scope, or report that board state is unknown |
 | `gh project list` returns nothing, but a board exists | **Expected, not a bug.** It lists projects owned by a login *and visible to you*; a board owned by someone else returns empty and exit 0. Never use it as the board check — use the repo-scoped query below |
 | `Status` value rejected on `item-edit` | The option name does not match. Option names are per-board — read them first ([project-board.md](project-board.md)) |
