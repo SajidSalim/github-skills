@@ -18,7 +18,7 @@ import {
   closingGateEnabled, globToRegExp, deployTriggersIn, deployBases, LINTER, FIND_DUPLICATES,
   resolveExecutable, heredocBodies, bodySources, nativePath,
   gitCommands, discardForm, pushTargets, discardOptionOff, discardGateEnabled, checkoutAt, headBranch,
-  defaultCandidates, branchExists, selfCheck, ghRepo,
+  defaultCandidates, branchExists, selfCheck, ghRepo, absolutePathEnv,
 } from "../../hooks/check-issue-workflow.mjs";
 
 const temps = [];
@@ -322,6 +322,23 @@ describe("issueNumber", () => {
   });
   test("edit: does not mistake a flag value for the target", () => {
     assert.equal(issueNumber("edit", ["--milestone", "3"], ""), null);
+  });
+});
+
+// The linter looks gh and jq up by bare name in the user's repository.
+describe("absolutePathEnv", () => {
+  test("drops empty and relative PATH entries, keeps the rest of the environment", () => {
+    const env = absolutePathEnv({ PATH: "/usr/bin::bin:./x:/opt/b", HOME: "/h" }, "linux");
+    assert.deepEqual(env, { PATH: "/usr/bin:/opt/b", HOME: "/h" });
+  });
+
+  test("on Windows, rewrites the Path key whatever its case", () => {
+    const env = absolutePathEnv({ Path: 'C:\\a;;rel;"C:\\b c"' }, "win32");
+    assert.deepEqual(env, { Path: 'C:\\a;"C:\\b c"' });
+  });
+
+  test("no PATH at all is left alone", () => {
+    assert.deepEqual(absolutePathEnv({ HOME: "/h" }, "linux"), { HOME: "/h" });
   });
 });
 

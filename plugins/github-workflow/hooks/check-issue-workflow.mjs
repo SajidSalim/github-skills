@@ -50,7 +50,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, existsSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { resolve, join, dirname, isAbsolute, relative } from "node:path";
+import { resolve, join, dirname, isAbsolute, relative, win32, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const PLUGIN_ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -865,8 +865,8 @@ export function resolveExecutable(name, env = process.env, platform = process.pl
   const win = platform === "win32";
   const exts = win ? [".exe", ".com"] : [""];
   for (const entry of path.split(win ? ";" : ":")) {
-    const dir = entry.replace(/^"(.*)"$/, "$1");
-    if (!dir || !isAbsolute(dir)) continue;
+    const dir = absoluteEntry(entry, platform);
+    if (!dir) continue;
     for (const ext of exts) {
       const file = join(dir, name + ext);
       try {
@@ -877,6 +877,27 @@ export function resolveExecutable(name, env = process.env, platform = process.pl
     }
   }
   return null;
+}
+
+/** A PATH entry's directory, quotes removed, when it is absolute on `platform`; else null. */
+function absoluteEntry(entry, platform = process.platform) {
+  const dir = entry.replace(/^"(.*)"$/, "$1");
+  return dir && (platform === "win32" ? win32 : posix).isAbsolute(dir) ? dir : null;
+}
+
+/**
+ * A copy of `env` whose PATH keeps only absolute entries, for a child the hook spawns in the
+ * user's repository: that child looks programs up by bare name (the linter runs gh and jq), and
+ * an empty or relative entry would let the repository supply them. Whatever case the variable's
+ * name has on Windows, that one key is rewritten.
+ */
+export function absolutePathEnv(env = process.env, platform = process.platform) {
+  const out = { ...env };
+  const key = Object.keys(out).find((k) => (platform === "win32" ? /^path$/i.test(k) : k === "PATH"));
+  if (key === undefined || typeof out[key] !== "string") return out;
+  const sep = platform === "win32" ? ";" : ":";
+  out[key] = out[key].split(sep).filter((e) => absoluteEntry(e, platform) !== null).join(sep);
+  return out;
 }
 
 // ---------------------------------------------------------------- the body checks
@@ -1948,7 +1969,7 @@ function postToolUse({ kind, action, args, cwd, adopted, gates, payload, repo })
   if (!n || !bash || !existsSync(LINTER)) process.exit(0);
 
   const argv = [slash(LINTER), n, ...(kind === "pr" ? ["--pr"] : []), ...(repo ? ["--repo", repo] : [])];
-  const run = spawnSync(bash, argv, { cwd, encoding: "utf8", timeout: 40_000 });
+  const run = spawnSync(bash, argv, { cwd, encoding: "utf8", timeout: 40_000, env: absolutePathEnv() });
 
   if (run.error || run.status === null || run.status === 0) process.exit(0);
 
