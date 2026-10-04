@@ -37,7 +37,7 @@ gh issue list --label "status:in-progress" --state open --json number,title,upda
 ## Duplicate check — run before filing anything
 
 ```bash
-bash <skill-dir>/scripts/find-duplicates.sh "<the title you intend to file>"
+bash "<skill-dir>/scripts/find-duplicates.sh" "<the title you intend to file>"
 ```
 
 Or by hand — four queries, **always `--state all`**, because the closed issues carry the decisions:
@@ -247,7 +247,7 @@ gh issue list --state closed --limit 50 --json number,title,closedAt
 gh search issues --assignee "@me" --state open
 
 # Check the whole backlog against the label taxonomy
-bash <skill-dir>/scripts/lint-issue-labels.sh --all --state all
+bash "<skill-dir>/scripts/lint-issue-labels.sh" --all --state all
 ```
 
 ## CRLF — the trap on Windows
@@ -286,7 +286,7 @@ Prefer `--jq` where one command can do it. Reach for piped `jq` only when combin
 
 ### `NOT RUNNING` from the hook self-check
 
-`/github-workflow:doctor` (or `node <skill-dir>/../../hooks/check-issue-workflow.mjs --self-check`) reports `NOT RUNNING` when the label linter cannot find `jq` — the state the taxonomy gate otherwise **degrades to a silent pass** on, so a green issue create proves nothing until it reports ready.
+`/github-workflow:doctor` (or `node "<skill-dir>/../../hooks/check-issue-workflow.mjs" --self-check`) reports `NOT RUNNING` when the label linter cannot find `jq` — the state the taxonomy gate otherwise **degrades to a silent pass** on, so a green issue create proves nothing until it reports ready.
 
 Restarting the editor will probably not fix it. A winget install lands on the *persisted* user
 `PATH`, but a process inherits its environment from whatever launched it, and on Windows that parent

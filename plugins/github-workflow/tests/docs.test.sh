@@ -19,6 +19,13 @@ test_references_run_the_plugins_scripts() {
   assert_contains "$(cat "$_SKILL"/references/*.md)" "<skill-dir>/scripts/find-duplicates.sh"
 }
 
+# A plugin path can hold a space (`/c/Users/Jane Doe/...`); SKILL.md quotes every script path,
+# and an agent substituting `<skill-dir>` literally needs the references to do the same.
+test_references_quote_the_skill_dir_in_commands() {
+  local hits; hits=$(grep -n -H -E '(bash|node) <skill-dir>' "$_SKILL"/references/*.md || true)
+  [[ -z "$hits" ]] || { printf 'unquoted <skill-dir> in a command:\n%s\n' "$hits" >&2; return 1; }
+}
+
 test_no_reference_points_into_a_dot_claude_directory() {
   local hits; hits=$(grep -n -H -E '\.claude/(hooks|skills)/' "$_SKILL"/references/*.md || true)
   [[ -z "$hits" ]] || { printf '%s\n' "$hits" >&2; return 1; }
