@@ -1071,13 +1071,13 @@ export function hasDeployImpact(body) {
  */
 export function changedFiles(cwd, base, head = "HEAD") {
   const usable = (ref) => typeof ref === "string" && ref !== "" && !ref.startsWith("-");
-  if (!usable(base) || !usable(head)) return null;
+  if (!usable(base) || !usable(head) || budget.spent()) return null;
   const git = resolveExecutable("git");
   if (!git) return null;
   const run = spawnSync(git, ["diff", "--name-only", `${base}...${head}`, "--"], {
     cwd,
     encoding: "utf8",
-    timeout: 5_000,
+    timeout: budget.timeout(),
   });
 
   if (run.error || run.status !== 0) return null;
@@ -1355,15 +1355,15 @@ export function headBranch(gitDir) {
  * read that, so git runs then -- and the callers ask only once the checkout is known to be adopted.
  * Null when detached, unreadable, or there is no git. `git` is called for the executable only then.
  */
-export function checkoutBranch(checkout, git) {
+export function checkoutBranch(checkout, git, time = budget) {
   const branch = headBranch(checkout.gitDir);
   if (branch !== ".invalid") return branch;
-  const exe = git();
+  const exe = time.spent() ? null : git();
   if (!exe) return null;
   const run = spawnSync(exe, [...SAFE_GIT, "symbolic-ref", "--quiet", "--short", "HEAD"], {
     cwd: checkout.root,
     encoding: "utf8",
-    timeout: 5_000,
+    timeout: time.timeout(),
   });
   const out = !run.error && run.status === 0 ? run.stdout.trim() : "";
   return out || null;
@@ -1427,11 +1427,34 @@ export function defaultCandidates(gitDir) {
 // repository's own config must not make that git run a program of its choosing.
 const SAFE_GIT = ["-c", "core.fsmonitor=false"];
 
-export function defaultBranches(git, root) {
+/**
+ * A deadline the git probes share: `spent()` once it has passed, and `timeout(max)` the spawn
+ * timeout to use -- `max`, cut to what is left, never 0 (which spawnSync reads as none).
+ *
+ * Claude Code allows the hook 15 s (hooks.json) and, past that, treats it as a non-blocking error
+ * and runs the command: a discard would go ahead unasked. Each probe has its own 5 s cap, and a
+ * compound command with several discard forms on a slow repository could add up past 15 s, so the
+ * hook gives them about 10 s in all from its start. Once spent, the discard gate asks with the
+ * command alone, and the other probes fall back as they do on a timeout.
+ */
+export function makeBudget(ms, now = Date.now) {
+  const end = now() + ms;
+  return {
+    spent: () => now() >= end,
+    timeout: (max = 5_000) => Math.max(1, Math.min(max, end - now())),
+  };
+}
+
+const HOOK_BUDGET_MS = 10_000;
+// Unlimited until main() starts the clock: the tests import these functions.
+let budget = makeBudget(Infinity);
+
+export function defaultBranches(git, root, time = budget) {
+  if (time.spent()) return ["main", "master"];
   const run = spawnSync(git, [...SAFE_GIT, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], {
     cwd: root,
     encoding: "utf8",
-    timeout: 5_000,
+    timeout: time.timeout(),
   });
   const out = !run.error && run.status === 0 ? run.stdout.trim() : "";
   const name = out.includes("/") ? out.slice(out.indexOf("/") + 1) : "";
@@ -1497,7 +1520,7 @@ export function deployBases(cwd, baseFlag) {
   const head = spawnSync(git, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], {
     cwd,
     encoding: "utf8",
-    timeout: 5_000,
+    timeout: budget.timeout(),
   });
   const remote = !head.error && head.status === 0 ? head.stdout.trim() : "";
   return remote ? [remote] : ["origin/main", "main"];
@@ -1759,7 +1782,7 @@ function payloadCwd(payload) {
  * runs only then, to confirm the default branch and, if it matches, to ask whether git ignores the
  * file (workflow tools keep ignored scratch in the main checkout). Anything unknown passes.
  */
-export function editAsk(payload, env = process.env) {
+export function editAsk(payload, env = process.env, time = budget) {
   const input = payload?.tool_input;
   const raw = payload?.tool_name === "NotebookEdit" ? input?.notebook_path : input?.file_path;
   if (typeof raw !== "string" || raw === "") return null;
@@ -1773,14 +1796,20 @@ export function editAsk(payload, env = process.env) {
   if (!checkout) return null;
   if (within(checkout.gitDir, file) || within(join(checkout.root, ".git"), file)) return null;
   if (!branchGateOn(checkout.root)) return null;
-  const branch = checkoutBranch(checkout, () => resolveExecutable("git", env));
+  const branch = checkoutBranch(checkout, () => resolveExecutable("git", env), time);
   if (!branch || !defaultCandidates(checkout.gitDir).includes(branch)) return null;
 
   const git = resolveExecutable("git", env);
-  if (!git || !defaultBranches(git, checkout.root).includes(branch)) return null;
+  if (!git || !defaultBranches(git, checkout.root, time).includes(branch)) return null;
   const path = slash(relative(checkout.root, file));
-  const ignored = spawnSync(git, [...SAFE_GIT, "check-ignore", "-q", "--", path], { cwd: checkout.root, timeout: 5_000 });
-  if (!ignored.error && ignored.status === 0) return null;
+  // Out of time, the file is taken as not ignored: the human is asked rather than not.
+  if (!time.spent()) {
+    const ignored = spawnSync(git, [...SAFE_GIT, "check-ignore", "-q", "--", path], {
+      cwd: checkout.root,
+      timeout: time.timeout(),
+    });
+    if (!ignored.error && ignored.status === 0) return null;
+  }
 
   return editReason(whoOf(payload), path, branch);
 }
@@ -1790,8 +1819,9 @@ const COMMITS = new Set(["commit", "merge", "cherry-pick", "revert", "am"]);
 /**
  * The ask gates on a Bash command: the reason for the first git command that should ask, or null.
  * Every git command in it is judged, in order, each in the directory the shell will run it in.
+ * `time` is the deadline its git probes share (makeBudget).
  */
-export function gitAsk(command, cwd, payload = {}, env = process.env) {
+export function gitAsk(command, cwd, payload = {}, env = process.env, time = budget) {
   const cmds = gitCommands(command, cwd);
   if (cmds.length === 0) return null;
 
@@ -1802,7 +1832,7 @@ export function gitAsk(command, cwd, payload = {}, env = process.env) {
   const defaults = new Map();
   const defaultsOf = (root) => {
     if (!git()) return [];
-    if (!defaults.has(root)) defaults.set(root, defaultBranches(git(), root));
+    if (!defaults.has(root)) defaults.set(root, defaultBranches(git(), root, time));
     return defaults.get(root);
   };
 
@@ -1818,7 +1848,7 @@ export function gitAsk(command, cwd, payload = {}, env = process.env) {
     else movedSomewhere = true;
   };
   const branchOf = (checkout) =>
-    movedSomewhere ? null : moved.has(checkout.root) ? moved.get(checkout.root) : checkoutBranch(checkout, git);
+    movedSomewhere ? null : moved.has(checkout.root) ? moved.get(checkout.root) : checkoutBranch(checkout, git, time);
 
   for (const g of cmds) {
     if (g.moves) {
@@ -1827,7 +1857,7 @@ export function gitAsk(command, cwd, payload = {}, env = process.env) {
     }
     const form = discardForm(g);
     const reason =
-      (form && discardAsk(git, g, form, who, cwd, env)) || branchAsk(g, branchOf, who, defaultsOf);
+      (form && discardAsk(git, g, form, who, cwd, env, time)) || branchAsk(g, branchOf, who, defaultsOf);
     if (reason) return reason;
     const target = switchTarget(g, form);
     if (target !== undefined) moveTo(g.dir, target);
@@ -1904,12 +1934,12 @@ function branchAsk(g, branchOf, who, defaultsOf) {
  * The discard gate on one git command already known to be a discarding form. `git` resolves the
  * executable; without one the gate passes, and the self-check reports it.
  */
-function discardAsk(git, g, form, who, cwd, env) {
+function discardAsk(git, g, form, who, cwd, env, time = budget) {
   const context = loadRepoContext(g.dir ?? cwd);
   if (!discardGateEnabled(env, context.config?.gates) || !git()) return null;
   if (g.dir === null) return discardReason(who, form.label, null, null);
   if (form.unknown) return discardReason(who, form.label, placeOf(g.dir), null);
-  const loss = lossOf(git(), g.dir, form);
+  const loss = lossOf(git(), g.dir, form, time);
   if (loss === null || (loss.lost && loss.lost.length === 0)) return null;
   return discardReason(who, form.label, loss.where, loss.lost);
 }
@@ -1919,17 +1949,19 @@ const placeOf = (dir) => slash(checkoutAt(dir)?.root ?? dir);
 
 /**
  * What `form` would destroy, asked of git in `dir`: `{ where, lost }`, `lost` null when git ran
- * out of time (the command alone is then shown); or null when git cannot answer at all -- not a
- * repository, a worktree that does not exist -- which passes.
+ * out of time, or the hook's shared deadline had passed before asking (the command alone is then
+ * shown); or null when git cannot answer at all -- not a repository, a worktree that does not
+ * exist -- which passes.
  *
  * User-derived paths go after `--`, always: they come from the command the model wrote, and git
  * must never read one as an option.
  */
-function lossOf(git, dir, form) {
+function lossOf(git, dir, form, time = budget) {
+  if (time.spent()) return { where: placeOf(dir), lost: null };
   // The directory comes from the command, before anyone approved it: never let a repository's own
   // config run a program (core.fsmonitor) on the hook's behalf.
   const run = (at, args) =>
-    spawnSync(git, [...SAFE_GIT, "--no-optional-locks", ...args], { cwd: at, encoding: "utf8", timeout: 5_000 });
+    spawnSync(git, [...SAFE_GIT, "--no-optional-locks", ...args], { cwd: at, encoding: "utf8", timeout: time.timeout() });
   const timedOut = (r) => r.error?.code === "ETIMEDOUT";
 
   if (form.stash) {
@@ -2110,6 +2142,7 @@ export function selfCheck(cwd = process.cwd(), env = process.env, linter = LINTE
 // ---------------------------------------------------------------- main
 
 async function main() {
+  budget = makeBudget(HOOK_BUDGET_MS);
   const argv = process.argv.slice(2);
   if (argv.includes("--self-check")) {
     const rows = selfCheck(argValue(argv, ["--cwd"]) ?? process.cwd());

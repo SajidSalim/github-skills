@@ -18,7 +18,7 @@ import {
   closingGateEnabled, globToRegExp, deployTriggersIn, deployBases, LINTER, FIND_DUPLICATES,
   resolveExecutable, heredocBodies, bodySources, nativePath,
   gitCommands, discardForm, pushTargets, discardOptionOff, discardGateEnabled, checkoutAt, headBranch,
-  defaultCandidates, branchExists, selfCheck, ghRepo, absolutePathEnv, checkoutBranch,
+  defaultCandidates, branchExists, selfCheck, ghRepo, absolutePathEnv, checkoutBranch, makeBudget, gitAsk,
 } from "../../hooks/check-issue-workflow.mjs";
 
 const temps = [];
@@ -1229,6 +1229,42 @@ describe("discard gate switches", () => {
 
 // The branch gate runs on every Edit and Write in every repository, so it finds the checkout and
 // its branch by reading files, never by spawning git.
+// Claude Code allows the hook 15 s and runs the command anyway past that: the ask gates' git
+// probes share one deadline, and once it has passed they stop probing and ask with the command.
+describe("makeBudget", () => {
+  test("each spawn gets at most its own cap and never more than what is left", () => {
+    let t = 1_000;
+    const b = makeBudget(10_000, () => t);
+    assert.equal(b.timeout(5_000), 5_000);
+    assert.equal(b.spent(), false);
+    t += 7_000;
+    assert.equal(b.timeout(5_000), 3_000);
+    t += 3_000;
+    assert.equal(b.spent(), true);
+    assert.ok(b.timeout(5_000) >= 1, "a spawn timeout of 0 would mean none at all");
+  });
+
+  test("past the deadline, the discard gate asks with the command alone", { skip: !gitAvailable }, () => {
+    const dir = temp("budget");
+    const git = (...a) => spawnSync("git", a, { cwd: dir, encoding: "utf8" });
+    git("init", "-q", "-b", "main");
+    mkdirSync(join(dir, "lib"));
+    writeFileSync(join(dir, "lib", "a.txt"), "a\n");
+    git("add", "-A");
+    git("-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "seed", "--no-verify");
+    writeFileSync(join(dir, "lib", "a.txt"), "b\n");
+
+    const fresh = gitAsk("git checkout -- lib", dir, {}, process.env, makeBudget(10_000));
+    assert.match(fresh, /lib\/a\.txt/);
+    let t = 0;
+    const spent = makeBudget(10_000, () => t);
+    t = 10_000;
+    const late = gitAsk("git checkout -- lib", dir, {}, process.env, spent);
+    assert.match(late, /could not tell which/);
+    assert.doesNotMatch(late, /lib\/a\.txt/);
+  });
+});
+
 describe("checkoutBranch", () => {
   const reftable = gitAvailable && spawnSync("git", ["init", "-q", "--ref-format=reftable", temp("probe")]).status === 0;
 
