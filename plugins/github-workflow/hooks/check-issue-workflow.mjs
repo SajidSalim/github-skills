@@ -1349,6 +1349,26 @@ export function headBranch(gitDir) {
   }
 }
 
+/**
+ * The branch checked out at `checkout`: headBranch, except in a reftable repository, whose HEAD file
+ * always reads `ref: refs/heads/.invalid` while the real HEAD lives in the reftable. Only git can
+ * read that, so git runs then -- and the callers ask only once the checkout is known to be adopted.
+ * Null when detached, unreadable, or there is no git. `git` is called for the executable only then.
+ */
+export function checkoutBranch(checkout, git) {
+  const branch = headBranch(checkout.gitDir);
+  if (branch !== ".invalid") return branch;
+  const exe = git();
+  if (!exe) return null;
+  const run = spawnSync(exe, [...SAFE_GIT, "symbolic-ref", "--quiet", "--short", "HEAD"], {
+    cwd: checkout.root,
+    encoding: "utf8",
+    timeout: 5_000,
+  });
+  const out = !run.error && run.status === 0 ? run.stdout.trim() : "";
+  return out || null;
+}
+
 /** Where a git directory keeps its refs: a linked worktree's `commondir` names it. */
 function commonDir(gitDir) {
   try {
@@ -1753,7 +1773,7 @@ export function editAsk(payload, env = process.env) {
   if (!checkout) return null;
   if (within(checkout.gitDir, file) || within(join(checkout.root, ".git"), file)) return null;
   if (!branchGateOn(checkout.root)) return null;
-  const branch = headBranch(checkout.gitDir);
+  const branch = checkoutBranch(checkout, () => resolveExecutable("git", env));
   if (!branch || !defaultCandidates(checkout.gitDir).includes(branch)) return null;
 
   const git = resolveExecutable("git", env);
@@ -1798,7 +1818,7 @@ export function gitAsk(command, cwd, payload = {}, env = process.env) {
     else movedSomewhere = true;
   };
   const branchOf = (checkout) =>
-    movedSomewhere ? null : moved.has(checkout.root) ? moved.get(checkout.root) : headBranch(checkout.gitDir);
+    movedSomewhere ? null : moved.has(checkout.root) ? moved.get(checkout.root) : checkoutBranch(checkout, git);
 
   for (const g of cmds) {
     if (g.moves) {

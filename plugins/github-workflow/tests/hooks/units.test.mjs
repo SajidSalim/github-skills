@@ -18,7 +18,7 @@ import {
   closingGateEnabled, globToRegExp, deployTriggersIn, deployBases, LINTER, FIND_DUPLICATES,
   resolveExecutable, heredocBodies, bodySources, nativePath,
   gitCommands, discardForm, pushTargets, discardOptionOff, discardGateEnabled, checkoutAt, headBranch,
-  defaultCandidates, branchExists, selfCheck, ghRepo, absolutePathEnv,
+  defaultCandidates, branchExists, selfCheck, ghRepo, absolutePathEnv, checkoutBranch,
 } from "../../hooks/check-issue-workflow.mjs";
 
 const temps = [];
@@ -1229,6 +1229,25 @@ describe("discard gate switches", () => {
 
 // The branch gate runs on every Edit and Write in every repository, so it finds the checkout and
 // its branch by reading files, never by spawning git.
+describe("checkoutBranch", () => {
+  const reftable = gitAvailable && spawnSync("git", ["init", "-q", "--ref-format=reftable", temp("probe")]).status === 0;
+
+  test("reads HEAD from the file, without git, in a files-backend repository", () => {
+    const d = temp("co");
+    mkdirSync(join(d, ".git"));
+    writeFileSync(join(d, ".git", "HEAD"), "ref: refs/heads/main\n");
+    assert.equal(checkoutBranch(checkoutAt(d), () => assert.fail("git must not run")), "main");
+  });
+
+  test("asks git in a reftable repository, whose HEAD file is a placeholder", { skip: !reftable }, () => {
+    const d = temp("reftable");
+    spawnSync("git", ["init", "-q", "--ref-format=reftable", "-b", "main", d]);
+    assert.equal(headBranch(join(d, ".git")), ".invalid");
+    assert.equal(checkoutBranch(checkoutAt(d), () => resolveExecutable("git")), "main");
+    assert.equal(checkoutBranch(checkoutAt(d), () => null), null, "no git: unknown, which passes");
+  });
+});
+
 describe("checkoutAt and headBranch", () => {
   test("a .git directory", () => {
     const d = temp("co");

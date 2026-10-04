@@ -1369,6 +1369,45 @@ describe("PreToolUse — branch gate, edits", { skip: !gitAvailable }, () => {
   });
 });
 
+// A reftable repository's .git/HEAD always reads `ref: refs/heads/.invalid`; the branch is in the
+// reftable, so only git can say. reftable is planned as git 3.0's default.
+const reftableAvailable =
+  gitAvailable && gitIn(temp("reftable-probe"), "init", "-q", "--ref-format=reftable").status === 0;
+
+describe("PreToolUse — branch gate, reftable", { skip: !reftableAvailable }, () => {
+  const reftableRepo = () => {
+    const dir = temp("reftable");
+    gitIn(dir, "init", "-q", "--ref-format=reftable", "-b", "main");
+    for (const [k, v] of [["user.email", "t@example.com"], ["user.name", "t"], ["commit.gpgsign", "false"]]) {
+      gitIn(dir, "config", k, v);
+    }
+    write(dir, ".github/github-workflow.json", JSON.stringify(ADOPTED));
+    write(dir, "lib/a.txt", "a\n");
+    gitIn(dir, "add", "-A");
+    gitIn(dir, "commit", "-q", "-m", "seed", "--no-verify");
+    return dir;
+  };
+
+  test("git commit on main asks", () => {
+    assert.match(askOf(runHook(pre("git commit -m x", reftableRepo()))), /run git commit on main/);
+  });
+
+  test("an edit on main asks", () => {
+    const dir = reftableRepo();
+    const r = runHook({
+      hook_event_name: "PreToolUse", tool_name: "Edit", cwd: dir,
+      tool_input: { file_path: join(dir, "lib", "a.txt"), old_string: "a", new_string: "b" },
+    });
+    assert.match(askOf(r), /edit lib\/a\.txt on main/);
+  });
+
+  test("a feature branch passes", () => {
+    const dir = reftableRepo();
+    gitIn(dir, "checkout", "-q", "-b", "feature");
+    passes(runHook(pre("git commit -m x", dir)));
+  });
+});
+
 describe("PreToolUse — branch gate, commands", { skip: !gitAvailable }, () => {
   test("git commit -m x on main asks", () => {
     assert.equal(
