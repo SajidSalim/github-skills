@@ -663,6 +663,39 @@ describe("resolveBody — bodies the shell builds", () => {
     assert.ok(body(`echo x | tee pr.md; gh pr create --body-file pr.md`, dir).skip);
   });
 
+  // Each heredoc belongs to the simple command that owns its marker, not to a line range.
+  test("A: a heredoc fed to a later command on gh's line is not gh's body", () => {
+    const r = body(`gh pr create --body "$(cat notes.md)"; cat <<'EOF' | wc -l\nThis does not close #12.\nEOF`);
+    assert.ok(r.skip);
+    assert.equal(accidentalClosers(r.literal ?? "").length, 0);
+  });
+
+  test("B: a quoted delimiter that is not a plain word still opens a heredoc", () => {
+    const cmd = `gh pr create --body "$(cat <<'END-OF-BODY'\nThis does not close #12.\nEND-OF-BODY\n)"`;
+    assert.deepEqual(body(cmd), { text: "This does not close #12." });
+    assert.deepEqual(body(`gh pr create --body "$(cat <<"a b"\nRefs #1\na b\n)"`), { text: "Refs #1" });
+  });
+
+  test("C: tee's file operand is the heredoc's target, whatever its stdout is redirected to", () => {
+    const dir = temp("body");
+    writeFileSync(join(dir, "pr.md"), "stale: Refs #12\n");
+    const r = body(`tee pr.md <<'EOF' >/dev/null\nThis does not close #12.\nEOF\ngh pr create --body-file pr.md`, dir);
+    assert.equal(r.text, "This does not close #12.\n");
+    assert.equal(heredocBodies(`tee -a x.md <<'EOF' >/dev/null\nx\nEOF`)[0].target, "x.md");
+    assert.equal(heredocBodies(`tee -a x.md <<'EOF' >/dev/null\nx\nEOF`)[0].append, true);
+  });
+
+  test("D: a heredoc written after gh runs is not what gh read", () => {
+    const dir = temp("body");
+    writeFileSync(join(dir, "pr2.md"), "Refs #12\n");
+    const r = body(`gh pr create --body-file pr2.md && cat > pr2.md <<'EOF'\nThis does not close #12.\nEOF`, dir);
+    assert.deepEqual(r, { text: "Refs #12\n" });
+  });
+
+  test("a heredoc piped into gh's stdin is its --body-file - body", () => {
+    assert.deepEqual(body(`cat <<'EOF' | gh pr create --body-file -\nRefs #12\nEOF`), { text: "Refs #12" });
+  });
+
   test("a heredoc written to another file does not stand in for the body file", () => {
     const dir = temp("body");
     writeFileSync(join(dir, "pr.md"), "on disk\n");

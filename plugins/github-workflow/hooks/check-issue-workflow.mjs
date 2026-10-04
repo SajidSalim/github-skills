@@ -215,12 +215,12 @@ export function stripHeredocs(cmd) {
   return scanHeredocs(cmd, () => " ").text;
 }
 
-// `<<EOF`, `<<-EOF`, `<<'EOF'`, `<<"EOF"`.
+// `<<EOF`, `<<-EOF`, `<<'EOF'`, `<<"EOF"`; a quoted delimiter may be any word, `<<'END-OF-BODY'`.
 //
 // Both guards are load-bearing against `<<<"bar"`: without the lookahead the first two `<`
 // match and the third breaks it, but without the lookbehind the LAST two `<` match and `"bar"`
 // reads as a quoted delimiter. A test caught exactly that.
-const OPENER = /(?<!<)<<(?!<)(-?)[ \t]*(?:'([A-Za-z_]\w*)'|"([A-Za-z_]\w*)"|([A-Za-z_]\w*))/g;
+const OPENER = /(?<!<)<<(?!<)(-?)[ \t]*(?:'([^'\n]+)'|"([^"\n]+)"|([A-Za-z_]\w*))/g;
 
 /**
  * The command with each heredoc body and terminator removed and each opener replaced by
@@ -289,12 +289,28 @@ function redirectsIn(words) {
   return out;
 }
 
+/** Whether a word names `tee`, as a command does: `tee`, or a path to it. */
+const isTee = (v) => v.replace(/\\/g, "/").split("/").pop() === "tee";
+
 /**
- * The heredocs in a command, `[{ delim, target, append, body, line }]`.
+ * The files a `tee` simple command writes its input to: its operands, as `{ path, append }`
+ * (-a/--append). Its own redirects are left to redirectsIn.
+ */
+function teeTargets(simple, text) {
+  const { words } = plainWords(simple, text);
+  if (words.length === 0 || !isTee(words[0].v)) return [];
+  const append = words.some((w) => w.v === "--append" || /^-[a-z]*a[a-z]*$/i.test(w.v));
+  return words.slice(1).filter((w) => !w.v.startsWith("-")).map((w) => ({ path: w.v, append }));
+}
+
+/**
+ * The heredocs in a command, `[{ n, delim, target, targets, append, body, line, at }]`.
  *
- * `target` is the file the heredoc's own command writes with `> FILE` or `>> FILE` (`append`),
- * quotes removed, else null -- a heredoc inside `--body "$(cat <<'EOF' ...)"` has none. `line`
- * is the opener's line in `cmd`.
+ * `targets` are the files the heredoc's own command writes it to: `> FILE` or `>> FILE`, and a
+ * `tee`'s operands, each `{ path, append }`, quotes removed. `target` and `append` are the first
+ * of them, or null and false -- a heredoc inside `--body "$(cat <<'EOF' ...)"` has none. `line`
+ * is the opener's line in `cmd`, and `at` its marker's offset in the scanned text findGhTarget
+ * reports offsets in.
  */
 export function heredocBodies(cmd) {
   const scan = scanHeredocs(cmd, markOf);
@@ -303,13 +319,20 @@ export function heredocBodies(cmd) {
     const ids = words.map((w) => MARK.exec(w.v)?.[1]).filter((id) => id !== undefined);
     if (ids.length === 0) continue;
     const r = redirectsIn(words).at(-1);
-    for (const id of ids) targets.set(Number(id), r);
+    const all = [...teeTargets(words, scan.text), ...(r ? [r] : [])];
+    for (const id of ids) targets.set(Number(id), all);
   }
-  return scan.docs.map((d, n) => ({
-    ...d,
-    target: targets.get(n)?.path ?? null,
-    append: targets.get(n)?.append ?? false,
-  }));
+  return scan.docs.map((d, n) => {
+    const all = targets.get(n) ?? [];
+    return {
+      n,
+      ...d,
+      target: all[0]?.path ?? null,
+      append: all[0]?.append ?? false,
+      targets: all,
+      at: scan.text.indexOf(`__ghwf_heredoc_${n}__`),
+    };
+  });
 }
 
 /**
@@ -321,7 +344,7 @@ function writesIn(toks) {
   for (const words of simpleCommands(toks)) {
     if (words.length === 0 || words.some((w) => MARK.test(w.v))) continue;
     for (const r of redirectsIn(words)) files.push(r.path);
-    if (words[0].v.replace(/\\/g, "/").split("/").pop() === "tee") {
+    if (isTee(words[0].v)) {
       for (const w of words.slice(1)) if (!w.v.startsWith("-") && !/^\d*>/.test(w.v)) files.push(w.v);
     }
   }
@@ -369,11 +392,24 @@ export function findGhTarget(cmd) {
       expands,
       line: lineAt(t.at),
       endLine: lineAt(last.end - 1),
+      at: t.at,
+      end: last.end,
+      piped: pipedHeredocs(toks, i),
       writes: writesIn(toks.slice(0, i)),
     };
   }
 
   return null;
+}
+
+/** The heredocs fed to the simple command piped into `toks[i]`'s: `cat <<'EOF' | gh ...`. */
+function pipedHeredocs(toks, i) {
+  if (!(toks[i - 1]?.op && toks[i - 1].v === "|")) return [];
+  const ids = [];
+  for (let k = i - 2; k >= 0 && !toks[k].op; k--) {
+    for (const m of toks[k].v.matchAll(/__ghwf_heredoc_(\d+)__/g)) ids.push(Number(m[1]));
+  }
+  return ids;
 }
 
 /** Where `--name X` or `--name=X` is, as {index, value} -- index of the value's token -- or null. */
@@ -927,13 +963,19 @@ export function nativePath(file, { platform = process.platform, env = process.en
 
 /**
  * What the shell will feed the gh command `found` in `cmd`, for resolveBody: the heredocs that
- * run before or with it (`own` when opened on the gh command's own lines), the files the command
- * writes before gh by other means, and which arguments the shell expands.
+ * run before or with it, the files the command writes before gh by other means, and which
+ * arguments the shell expands.
+ *
+ * A heredoc belongs to the simple command whose text holds its marker, not to a line: `own` when
+ * that is the gh command itself (or a command piped into it), and a write only when it comes
+ * before gh. One on gh's line that feeds a later command (`; cat <<'EOF' | wc -l`), or writes a
+ * file after gh has read it (`&& cat > pr.md <<'EOF'`), is no part of the body.
  */
 export function bodySources(cmd, found) {
+  const piped = found.piped ?? [];
   const heredocs = heredocBodies(cmd)
-    .filter((h) => h.line <= found.endLine)
-    .map((h) => ({ ...h, own: h.line >= found.line }));
+    .filter((h) => h.at < found.end)
+    .map((h) => ({ ...h, own: h.at >= found.at || piped.includes(h.n) }));
   return { heredocs, writes: found.writes ?? [], expands: found.expands ?? [] };
 }
 
@@ -956,7 +998,7 @@ export function resolveBody(args, cwd, sources = {}) {
   const { heredocs = [], writes = [], expands = [] } = sources;
   if (hasFlag(args, WEB_FLAGS)) return { skip: "--web: a human completes the form" };
 
-  // What feeds gh itself: a heredoc on its own lines that is not redirected into a file.
+  // What feeds gh itself: a heredoc of its own that is not written into a file.
   const fed = heredocs.filter((h) => h.own && !h.target);
 
   const file = argAt(args, ["--body-file", "-F"]);
@@ -1034,7 +1076,13 @@ function bodyFile(file, cwd, heredocs, writes) {
   };
 
   // Heredocs that write the file before gh reads it, in order: `>` replaces it, `>>` appends.
-  const docs = heredocs.filter((h) => h.target && keyOf(h.target) === key);
+  const docs = [];
+  for (const h of heredocs) {
+    const into = (h.targets ?? (h.target ? [{ path: h.target, append: h.append }] : [])).find(
+      (t) => keyOf(t.path) === key,
+    );
+    if (into) docs.push({ body: h.body, append: into.append });
+  }
   if (docs.length > 0) {
     let text = null; // null: not yet written by this command
     for (const d of docs) {
