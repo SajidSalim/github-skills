@@ -40,6 +40,22 @@ test_destructive_examples_carry_an_ask_first_warning() {
   assert_contains "$(grep 'gh label delete "wontfix"' "$_SKILL/references/gh-commands.md")" "the operator's call, never yours"
 }
 
+# The merged PR is the record of a normal fix. A standalone "post it even when the merge closed
+# the issue" reads as an instruction to duplicate it on every merge.
+test_no_resolution_comment_follows_a_normal_merge() {
+  local doc; doc=$(cat "$_ASSETS/comment-templates.md")
+  assert_contains "$doc" "**Do not write this after a normal merge.**"
+  assert_not_contains "$doc" "Post it even when the merge closed the issue automatically."
+  assert_not_contains "$(cat "$_SKILL/references/labels.md")" "the merged PR and the resolution comment"
+}
+
+# gh issue develop and gh pr create default to the repository's default branch; a literal main
+# cuts from, and opens into, the wrong branch wherever the default is something else.
+test_examples_leave_the_base_to_the_default_branch() {
+  local hits; hits=$(grep -n -H -e '--base main' "$_MAIN" "$_SKILL"/references/*.md || true)
+  [[ -z "$hits" ]] || { printf 'hard-coded --base main:\n%s\n' "$hits" >&2; return 1; }
+}
+
 test_no_reference_points_into_a_dot_claude_directory() {
   local hits; hits=$(grep -n -H -E '\.claude/(hooks|skills)/' "$_SKILL"/references/*.md || true)
   [[ -z "$hits" ]] || { printf '%s\n' "$hits" >&2; return 1; }

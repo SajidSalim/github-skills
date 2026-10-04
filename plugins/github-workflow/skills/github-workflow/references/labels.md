@@ -127,7 +127,7 @@ A repo whose config says `"inFlightState": "board"` never carries those two — 
 | `resolution:cannot-reproduce` | Tried and failed to reproduce. List what you tried. |
 | `resolution:works-as-intended` | Behaviour is correct; the expectation was wrong. Explain the intent. |
 
-A normal fix needs no resolution label — the merged PR and the resolution comment say everything.
+A normal fix needs no resolution label — the merged PR says everything.
 
 **Every other close must carry one, and this is load-bearing.** The duplicate check
 ([duplicate-check.md](duplicate-check.md)) has to tell an *adjudicated decision* from an *old fix*
