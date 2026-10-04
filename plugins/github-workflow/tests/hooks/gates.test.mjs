@@ -795,6 +795,34 @@ describe("--repo", () => {
     assert.equal(runHook(pre(cmd, repoDir(ADOPTED))).status, 0);
   });
 
+  // An edit target given by URL names its repository as surely as --repo does.
+  test("an edit by URL of another repo is guest mode: no lint of this repo's same number", { skip: !bashAvailable }, () => {
+    const dir = repoDir(ADOPTED);
+    const r = runHook(post(`gh issue edit https://github.com/someone/else/issues/42 --add-label bug`, "", dir), {
+      hook: pluginTree('printf "%s" "$*" > args.txt\necho "  FAIL  #42   no type: label"\nexit 1\n'),
+    });
+    assert.equal(r.status, 0);
+    assert.equal(existsSync(join(dir, "args.txt")), false, "the linter must not run");
+  });
+
+  test("an edit by URL of the configured repo lints that repo", { skip: !bashAvailable }, () => {
+    const dir = repoDir(ADOPTED);
+    runHook(post(`gh pr edit https://github.com/acme/shop/pull/42 --add-label type:chore`, "", dir), {
+      hook: pluginTree('printf "%s" "$*" > args.txt\nexit 0\n'),
+    });
+    assert.match(readFileSync(join(dir, "args.txt"), "utf8"), /--repo acme\/shop/);
+  });
+
+  test("GH_REPO naming another repo is guest mode", () => {
+    const r = runHook(pre(`gh issue create --title x --body plain`, repoDir(ADOPTED)), { env: { GH_REPO: "acme/other" } });
+    assert.equal(r.status, 0);
+  });
+
+  test("--repo wins over GH_REPO", () => {
+    const cmd = `gh issue create --repo acme/shop --title x --body plain`;
+    assert.equal(runHook(pre(cmd, repoDir(ADOPTED)), { env: { GH_REPO: "acme/other" } }).status, 2);
+  });
+
   test("a config that names no repo cannot vouch for --repo", () => {
     const cmd = `gh issue create --repo acme/shop --title x --body plain`;
     assert.equal(runHook(pre(cmd, repoDir({ version: 1 }))).status, 0);

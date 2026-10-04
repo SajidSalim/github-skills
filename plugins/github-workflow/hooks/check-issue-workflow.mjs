@@ -19,7 +19,8 @@
  *                                      -> exit 2 carrying the report. Adopted repos.
  *
  * "Adopted" means the repository has .github/github-workflow.json and, when the command names
- * a repo with --repo, that it is the repo the config describes. Everything else is guest mode,
+ * a repo -- with --repo, an edit target's URL, or GH_REPO -- that it is the repo the config
+ * describes. Everything else is guest mode,
  * where only the closing-keyword and discard gates run. For an edit, the repository is the one
  * holding the FILE, never the session's cwd: a subagent in a worktree can write into the main
  * checkout, and that is the case the branch gate exists for.
@@ -1161,6 +1162,25 @@ export function issueNumber(action, args, stdout, kind = "issue") {
   return null;
 }
 
+const URL_REPO = /github\.com\/([^/\s]+)\/([^/\s]+)\/(?:issues|pull)\/\d+/;
+
+/**
+ * The repository a gh create|edit acts on, when the command says: `--repo`/`-R`, else the
+ * `owner/name` of an edit target given by URL (the positional before the first flag, as
+ * issueNumber reads it), else `GH_REPO`. Null when none does: the checkout's own repository.
+ */
+export function ghRepo(args, env = process.env) {
+  const flag = argValue(args, ["--repo", "-R"]);
+  if (flag !== null) return flag;
+  for (const a of args) {
+    if (a.startsWith("-")) break;
+    const m = URL_REPO.exec(a);
+    if (m) return `${m[1]}/${m[2]}`;
+  }
+  const fromEnv = env?.GH_REPO;
+  return typeof fromEnv === "string" && fromEnv.trim() !== "" ? fromEnv.trim() : null;
+}
+
 // ---------------------------------------------------------------- repo config and mode
 
 /** Parse the repo config, tolerating a BOM and CRLF. Returns {config} or {error}. */
@@ -1920,14 +1940,13 @@ function lossOf(git, dir, form) {
   return { where, lost };
 }
 
-function postToolUse({ kind, action, args, cwd, adopted, gates, payload }) {
+function postToolUse({ kind, action, args, cwd, adopted, gates, payload, repo }) {
   if (!adopted || gates.labelTaxonomy === false) process.exit(0);
 
   const n = issueNumber(action, args, stdoutOf(payload), kind);
   const bash = resolveExecutable("bash");
   if (!n || !bash || !existsSync(LINTER)) process.exit(0);
 
-  const repo = argValue(args, ["--repo", "-R"]);
   const argv = [slash(LINTER), n, ...(kind === "pr" ? ["--pr"] : []), ...(repo ? ["--repo", repo] : [])];
   const run = spawnSync(bash, argv, { cwd, encoding: "utf8", timeout: 40_000 });
 
@@ -2095,9 +2114,10 @@ async function main() {
   }
 
   const context = loadRepoContext(cwd);
-  const adopted = isAdopted(context, argValue(found.args, ["--repo", "-R"]));
+  const repo = ghRepo(found.args);
+  const adopted = isAdopted(context, repo);
   const gates = adopted ? (context.config.gates ?? {}) : {};
-  const state = { ...found, cwd, context, adopted, gates, payload };
+  const state = { ...found, cwd, context, adopted, gates, payload, repo };
 
   if (event === "PreToolUse") {
     const warning = preToolUse({ ...state, sources: bodySources(command, found) });

@@ -18,7 +18,7 @@ import {
   closingGateEnabled, globToRegExp, deployTriggersIn, deployBases, LINTER, FIND_DUPLICATES,
   resolveExecutable, heredocBodies, bodySources, nativePath,
   gitCommands, discardForm, pushTargets, discardOptionOff, discardGateEnabled, checkoutAt, headBranch,
-  defaultCandidates, branchExists, selfCheck,
+  defaultCandidates, branchExists, selfCheck, ghRepo,
 } from "../../hooks/check-issue-workflow.mjs";
 
 const temps = [];
@@ -322,6 +322,22 @@ describe("issueNumber", () => {
   });
   test("edit: does not mistake a flag value for the target", () => {
     assert.equal(issueNumber("edit", ["--milestone", "3"], ""), null);
+  });
+});
+
+describe("ghRepo", () => {
+  test("--repo first, then the edit target's URL, then GH_REPO", () => {
+    const url = ["https://github.com/someone/else/issues/42", "--add-label", "bug"];
+    assert.equal(ghRepo(["7", "--repo", "a/b"], { GH_REPO: "c/d" }), "a/b");
+    assert.equal(ghRepo(url, { GH_REPO: "c/d" }), "someone/else");
+    assert.equal(ghRepo(["https://github.com/o/r/pull/3"], {}), "o/r");
+    assert.equal(ghRepo(["7"], { GH_REPO: "c/d" }), "c/d");
+    assert.equal(ghRepo(["7"], {}), null);
+    assert.equal(ghRepo(["7"], { GH_REPO: "" }), null);
+  });
+
+  test("a URL in a flag value is not the target", () => {
+    assert.equal(ghRepo(["7", "--body", "https://github.com/x/y/issues/1"], {}), null);
   });
 });
 

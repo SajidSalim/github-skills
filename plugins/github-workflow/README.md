@@ -102,7 +102,8 @@ protocol by committing `.github/github-workflow.json`, and everywhere else the p
 
 The config is read from the root of the git repository, so commands run from a subdirectory are
 covered. A `gh … --repo X` command gets the repository gates only when `X` is the configured
-repository (URL and `HOST/OWNER/REPO` forms and any case match).
+repository (URL and `HOST/OWNER/REPO` forms and any case match). An edit target given by URL, and
+`GH_REPO`, name the repository the same way.
 
 ## Gates
 
