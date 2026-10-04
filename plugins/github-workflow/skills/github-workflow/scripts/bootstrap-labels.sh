@@ -18,7 +18,8 @@
 # SETTINGS. Without --config, the repository's .github/github-workflow.json is read when it
 # exists: `areas` becomes the area: set and `"inFlightState": "board"` implies --board. Flags
 # beat the config. With neither, the generic areas are used in labels-only mode. A found
-# config whose `repo` names another repository than --repo is ignored, with a note.
+# config is ignored, with a note, when --repo is given and its `repo` names another repository
+# or is missing.
 #
 # BOARD MODE. A repo whose GitHub Projects board owns in-flight state must not also carry
 # status:in-progress and status:needs-review -- two writers for one fact is how state goes
@@ -88,14 +89,14 @@ if [[ -n "$CONFIG" ]]; then
     exit 2
   fi
   # A config found in this checkout describes this checkout's repository. Another --repo gets
-  # none of its settings, as the hook treats a mismatched --repo as guest. Unlike the hook, a
-  # config with no `repo` still applies: nothing says it is another repository's.
+  # none of its settings, exactly as the hook treats it as guest: a `repo` naming another
+  # repository, or no `repo` at all, since then nothing says which repository it describes.
   # --config is the operator naming the settings outright, so it applies to any --repo.
   if $DISCOVERED && [[ -n "$REPO" ]]; then
     cfg_repo=$(jq -r '.repo // "" | tostring' <<<"$json" | tr -d '\r')
     want=$(norm_repo "$cfg_repo")
-    if [[ -n "$cfg_repo" && ( -z "$want" || "$want" != "$(norm_repo "$REPO")" ) ]]; then
-      echo "note: $CONFIG describes $cfg_repo, not $REPO -- ignoring it (pass --config to use it)" >&2
+    if [[ -z "$want" || "$want" != "$(norm_repo "$REPO")" ]]; then
+      echo "note: $CONFIG describes ${cfg_repo:-no repo}, not $REPO -- ignoring it (pass --config to use it)" >&2
       json='{"version":1}'
     fi
   fi

@@ -109,6 +109,19 @@ test_a_discovered_config_matches_every_form_gh_accepts_for_the_same_repo() {
   done
 }
 
+# Nothing in a config without `repo` says which repository it describes, so another --repo gets
+# none of it -- as the hook treats it as guest. Without --repo it still applies to this checkout.
+test_a_discovered_config_naming_no_repo_is_ignored_for_a_repo_flag() {
+  _adopted_repo '{"version":1,"inFlightState":"board","areas":["checkout"]}'
+  _dry --repo acme/other-repo
+  assert_eq 0 "$RUN_STATUS"
+  assert_contains "$RUN_OUT" "describes no repo, not acme/other-repo -- ignoring it (pass --config to use it)"
+  assert_not_contains "$RUN_OUT" "board mode"
+  assert_not_contains "$RUN_OUT" "area:checkout"
+  _dry
+  assert_contains "$RUN_OUT" "area:checkout" "without --repo the checkout's config applies"
+}
+
 test_a_url_naming_another_repo_still_ignores_the_config() {
   _adopted_repo '{"version":1,"repo":"acme/shop","areas":["checkout"]}'
   _dry --repo https://github.com/acme/other-repo.git
