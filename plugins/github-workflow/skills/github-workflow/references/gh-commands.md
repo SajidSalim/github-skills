@@ -225,7 +225,7 @@ Note `--comment` takes a string, not a file — `"$(cat file)"` is the reliable 
 gh label list --limit 200
 gh label create "type:feature" --color "0E8A16" --description "New capability" --force
 gh label edit "type:bug" --color "D73A4A"
-gh label delete "wontfix" --yes
+gh label delete "wontfix" --yes                                # destructive: strips it from every issue — the operator's call, never yours
 gh label clone owner/other-repo                                # copy a whole label set across repos
 ```
 

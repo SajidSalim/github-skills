@@ -26,6 +26,16 @@ test_references_quote_the_skill_dir_in_commands() {
   [[ -z "$hits" ]] || { printf 'unquoted <skill-dir> in a command:\n%s\n' "$hits" >&2; return 1; }
 }
 
+# An agent copies examples. The two irreversible ones say whose call they are, and the board
+# mutation shows no partial option list that would delete the options it leaves out.
+test_destructive_examples_carry_an_ask_first_warning() {
+  local board; board=$(cat "$_SKILL/references/project-board.md")
+  assert_contains "$board" "**Only on the operator's explicit instruction.**"
+  assert_contains "$board" "<every current option, verbatim, plus the new one"
+  assert_not_contains "$board" '{name: \"P0\"'
+  assert_contains "$(grep 'gh label delete "wontfix"' "$_SKILL/references/gh-commands.md")" "the operator's call, never yours"
+}
+
 test_no_reference_points_into_a_dot_claude_directory() {
   local hits; hits=$(grep -n -H -E '\.claude/(hooks|skills)/' "$_SKILL"/references/*.md || true)
   [[ -z "$hits" ]] || { printf '%s\n' "$hits" >&2; return 1; }
