@@ -405,6 +405,23 @@ describe("accidentalClosers", () => {
 
     assert.equal(accidentalClosers(body).length, 3);
   });
+
+  // GitHub accepts a colon after the keyword and a cross-repository `owner/repo#N` target.
+  test("a keyword followed by a colon is caught", () => {
+    const found = accidentalClosers("This does not close: #12.");
+    assert.equal(found.length, 1);
+    assert.match(found[0].reason, /negated/);
+  });
+
+  test("a cross-repository owner/repo#N target is caught", () => {
+    const found = accidentalClosers("This does not close acme/shop#12.");
+    assert.equal(found.length, 1);
+    assert.match(found[0].reason, /negated/);
+  });
+
+  test("the colon and cross-repository forms in plain prose are still allowed", () => {
+    assert.deepEqual(accidentalClosers("Closes: #12\nFixes acme/shop#3"), []);
+  });
 });
 
 // ---------------------------------------------------------------- deploy impact line

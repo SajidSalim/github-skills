@@ -1045,8 +1045,11 @@ export function missingMarkers(body) {
  *
  * There is no escaping syntax in GitHub's markdown. `Refs #N` / `Part of #N` are the safe
  * forms, and examples should use a placeholder such as #NNN.
+ *
+ * GitHub also accepts a colon after the keyword (`Closes: #12`) and a cross-repository target
+ * (`Closes owner/repo#12`), so both count.
  */
-const CLOSING_KEYWORD = /\b(close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/gi;
+const CLOSING_KEYWORD = /\b(close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+(?:[\w.-]+\/[\w.-]+)?#(\d+)/gi;
 
 /** Words that mean the author intends the opposite of what the scanner will do. */
 const NEGATORS =
