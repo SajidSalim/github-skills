@@ -62,7 +62,19 @@ if [[ -z "$CONFIG" ]]; then
   fi
 fi
 
-lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+# `owner/name`, lower-cased, from any form gh accepts for --repo (a URL, a host prefix, a `.git`
+# suffix); empty if it is not one. Mirrors the hook's normalizeRepo, so both compare alike.
+norm_repo() {
+  printf '%s\n' "$1" | awk '{
+    s = $0
+    gsub(/^[ \t]+|[ \t]+$/, "", s)
+    sub(/^[A-Za-z][A-Za-z0-9+.-]*:\/\//, "", s)
+    sub(/\.[Gg][Ii][Tt]$/, "", s)
+    n = split(s, p, "/"); k = 0
+    for (i = 1; i <= n; i++) if (p[i] != "") q[++k] = p[i]
+    if (k >= 2) print tolower(q[k-1] "/" q[k])
+  }'
+}
 
 CONFIG_AREAS=""
 if [[ -n "$CONFIG" ]]; then
@@ -76,11 +88,13 @@ if [[ -n "$CONFIG" ]]; then
     exit 2
   fi
   # A config found in this checkout describes this checkout's repository. Another --repo gets
-  # none of its settings, matching the hook, which treats a mismatched --repo as guest.
+  # none of its settings, as the hook treats a mismatched --repo as guest. Unlike the hook, a
+  # config with no `repo` still applies: nothing says it is another repository's.
   # --config is the operator naming the settings outright, so it applies to any --repo.
   if $DISCOVERED && [[ -n "$REPO" ]]; then
     cfg_repo=$(jq -r '.repo // "" | tostring' <<<"$json" | tr -d '\r')
-    if [[ -n "$cfg_repo" && "$(lower "$cfg_repo")" != "$(lower "$REPO")" ]]; then
+    want=$(norm_repo "$cfg_repo")
+    if [[ -n "$cfg_repo" && ( -z "$want" || "$want" != "$(norm_repo "$REPO")" ) ]]; then
       echo "note: $CONFIG describes $cfg_repo, not $REPO -- ignoring it (pass --config to use it)" >&2
       json='{"version":1}'
     fi
