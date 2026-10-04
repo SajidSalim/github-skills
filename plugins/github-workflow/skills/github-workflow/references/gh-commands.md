@@ -151,14 +151,14 @@ gh issue comment 231 --edit-last --body-file /tmp/updated.md   # amend your own 
 ## Branching
 
 ```bash
-gh issue develop 231 --name fix/231-checkout-blank-coupon --base main --checkout
+gh issue develop 231 --name fix/231-checkout-blank-coupon --checkout
 gh issue develop 231 --list                                    # branches already linked to it
 # WARNING: the link this creates closes #231 when a PR from that branch merges, whatever
 # your closing keywords say. Link an issue only if it should certainly close; otherwise use
 # `git checkout -b`. On a multi-issue branch only ONE issue can be linked -- pick the certain one.
 
 # Not your checkout, or it holds changes you did not make: never switch it -- use a worktree.
-gh issue develop 231 --name fix/231-checkout-blank-coupon --base main
+gh issue develop 231 --name fix/231-checkout-blank-coupon
 git fetch origin fix/231-checkout-blank-coupon
 git worktree add ../231-checkout-blank-coupon fix/231-checkout-blank-coupon
 ```
@@ -171,7 +171,7 @@ For a multi-issue branch, run this for the one issue that should certainly close
 ## Pull requests
 
 ```bash
-gh pr create --base main \
+gh pr create \
   --title "fix(checkout): treat a blank coupon code as no coupon" \
   --body-file pr.md \
   --label "type:bug,area:checkout" \

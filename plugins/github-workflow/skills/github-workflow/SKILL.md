@@ -251,9 +251,9 @@ changes you did not make, or is not yours, do not switch it (rule 2): create the
 `--checkout` and work in a worktree.
 
 ```bash
-gh issue develop 231 --name fix/231-checkout-blank-coupon --base main --checkout
+gh issue develop 231 --name fix/231-checkout-blank-coupon --checkout
 # not your checkout, or changes in it you did not make:
-gh issue develop 231 --name fix/231-checkout-blank-coupon --base main
+gh issue develop 231 --name fix/231-checkout-blank-coupon
 git fetch origin fix/231-checkout-blank-coupon
 git worktree add ../231-checkout-blank-coupon fix/231-checkout-blank-coupon
 ```
@@ -316,7 +316,7 @@ test is not done.
 ## 7. Opening the PR and reporting back
 
 ```bash
-gh pr create --base main --title "fix(checkout): treat a blank coupon code as no coupon" \
+gh pr create --title "fix(checkout): treat a blank coupon code as no coupon" \
              --body-file pr.md --label "type:bug,area:checkout"
 ```
 
