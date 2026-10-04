@@ -82,16 +82,22 @@ and the files that will be written, marking each that **already exists**:
 
 GitHub also reads files the table's paths miss: a PR description file in any letter case, at the
 root, in `docs/` or in `.github/`, or a `PULL_REQUEST_TEMPLATE/` directory there; and every file in
-`.github/ISSUE_TEMPLATE/` appears in the issue chooser. List them all:
+`.github/ISSUE_TEMPLATE/` appears in the issue chooser. List them, leaving out the table's paths:
 
 ```bash
 git ls-files -co --exclude-standard \
-  | grep -iE '^(docs/|\.github/)?(pull_request_template|issue_template)(\.[a-z]+$|/)'
+  | grep -iE '^(docs/|\.github/)?(pull_request_template|issue_template)(\.[a-z]+$|/)' \
+  | grep -vE '^\.github/(pull_request_template\.md|ISSUE_TEMPLATE/([1-4]-[a-z]+|config)\.yml)$'
 ```
 
-For each one, ask whether the new files **replace** it (`git rm` it in step 9), **sit beside** it,
-or are **skipped**. Two PR description files, or two bug forms in the chooser, is the outcome to
-avoid. Say too that the installed `config.yml` sets `blank_issues_enabled: false`, so the chooser
+A hit that differs from a table path **only in letter case** (`.github/PULL_REQUEST_TEMPLATE.md`)
+is the same file on Windows and macOS. It is that table row's existing file: show the diff in step
+6.4 and write into it under its own spelling, or first rename it to the table's spelling with
+`git mv`. **Never `git rm` it** — that removes the file this run writes.
+
+For every other hit, ask whether the new files **replace** it (`git rm` it in step 9), **sit
+beside** it, or are **skipped**. Two PR description files, or two bug forms in the chooser, is the
+outcome to avoid. Say too that the installed `config.yml` sets `blank_issues_enabled: false`, so the chooser
 stops offering a blank issue, and what happens to its Security contact link (step 1): kept,
 pointed at the security policy, or dropped.
 
@@ -212,8 +218,9 @@ Nothing is committed. Propose the commands below, on `<branch>` from step 5, and
 ask before running any of them. The `git add` names **exactly the files this run wrote**, by path:
 add each step 7 extra that was written (`.github/GITHUB_WORKFLOW.md`, the three scripts in
 `.github/scripts/`, `AGENTS.md`, `CLAUDE.md`), drop anything that was skipped, and add a
-`git rm <path>` for each file step 4 replaced. Label the PR with one of the configured areas, `ci`
-if it was kept:
+`git rm <path>` for each file step 4 replaced. A case variant kept under its own spelling is staged
+under that spelling: `git add` of the table's spelling stages nothing there. Label the PR with one
+of the configured areas, `ci` if it was kept:
 
 ```bash
 git add \

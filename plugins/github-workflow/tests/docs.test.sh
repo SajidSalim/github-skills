@@ -303,6 +303,26 @@ test_setup_finds_existing_templates_at_other_paths() {
   assert_contains "$doc" ".github/ISSUE_TEMPLATE/"
   assert_contains "$doc" "**replace**"
   assert_contains "$doc" "blank_issues_enabled: false"
+  assert_contains "$doc" 'Never `git rm` it'
+}
+
+# The search runs as written in the skill: the files setup itself installs are left out, so
+# "replace" can never remove one, while their letter-case variants and the other paths stay in.
+test_setup_template_search_leaves_out_its_own_install_paths() {
+  local f="$PLUGIN_ROOT/skills/setup/SKILL.md" filters out
+  # The pipeline's grep stages, joined back into one pipeline.
+  filters=$(awk '/^git ls-files -co --exclude-standard/ {on=1; next} on && /^```/ {exit} on {print}' "$f" \
+    | sed -e 's/^ *| *//' -e 's/ *\\$//' | paste -s -d '|' -)
+  [[ "$filters" == grep* ]] || { echo "template search not found in setup" >&2; return 1; }
+  out=$(printf '%s\n' \
+    .github/pull_request_template.md .github/ISSUE_TEMPLATE/1-bug.yml .github/ISSUE_TEMPLATE/4-chore.yml \
+    .github/ISSUE_TEMPLATE/config.yml .github/PULL_REQUEST_TEMPLATE.md docs/pull_request_template.md \
+    .github/PULL_REQUEST_TEMPLATE/a.md .github/ISSUE_TEMPLATE/bug_report.yml src/pull_request_template.md \
+    | eval "$filters")
+  assert_eq ".github/PULL_REQUEST_TEMPLATE.md
+docs/pull_request_template.md
+.github/PULL_REQUEST_TEMPLATE/a.md
+.github/ISSUE_TEMPLATE/bug_report.yml" "$out"
 }
 
 # The Security contact link tells reporters not to open a public issue, so it must lead somewhere.
