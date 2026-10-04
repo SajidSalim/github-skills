@@ -56,6 +56,13 @@ test_examples_leave_the_base_to_the_default_branch() {
   [[ -z "$hits" ]] || { printf 'hard-coded --base main:\n%s\n' "$hits" >&2; return 1; }
 }
 
+# In someone else's repository, self-assigning and `gh issue develop` are visible writes too.
+test_guest_mode_asks_before_self_assign_and_issue_develop() {
+  local row; row=$(grep '^| Claiming |' "$_MAIN")
+  assert_contains "$row" 'self-assigning (§5.2) and `gh issue develop` (§5.4)'
+  assert_contains "$row" "ask first"
+}
+
 test_no_reference_points_into_a_dot_claude_directory() {
   local hits; hits=$(grep -n -H -E '\.claude/(hooks|skills)/' "$_SKILL"/references/*.md || true)
   [[ -z "$hits" ]] || { printf '%s\n' "$hits" >&2; return 1; }
