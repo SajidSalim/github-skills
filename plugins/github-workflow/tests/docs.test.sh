@@ -379,6 +379,15 @@ test_the_publishing_guide_merges_before_tagging() {
   assert_contains "$(cat "$f")" "## Keep private material out of this repository"
 }
 
+# The suites pin the setup and doctor skills' text, not their behaviour, so each release runs
+# the adoption flow once in a session.
+test_the_publishing_guide_runs_setup_and_doctor_live() {
+  local doc; doc=$(cat "$REPO_ROOT/docs/publishing.md")
+  assert_contains "$doc" "/github-workflow:setup --dry-run"
+  assert_contains "$doc" "/github-workflow:doctor"
+  assert_contains "$doc" "throwaway GitHub repository"
+}
+
 test_licenses_are_mit_and_name_the_owner() {
   # The owner's name is read from the manifest, not written here: the scrub test allows the
   # login only in plugin.json, LICENSE and the repository URLs.
