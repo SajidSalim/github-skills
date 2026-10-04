@@ -393,6 +393,23 @@ describe("accidentalClosers", () => {
     assert.deepEqual(accidentalClosers("Closes #12. It does not address the migration."), []);
   });
 
+  // The run-up is the keyword's own clause: a negation in the sentence before says nothing
+  // about it, and advising `Refs #N` there would leave the issue open.
+  test("a negation in an earlier sentence or clause does not negate the keyword", () => {
+    for (const body of [
+      "Not a breaking change. Closes #12",
+      "Small fix that can't regress checkout. Fixes #7",
+      "Without this, checkout returns 500. Fixes #9",
+      "No migration, doesn't touch the API -- closes #3",
+    ]) {
+      assert.deepEqual(accidentalClosers(body), [], `wrongly flagged: ${body}`);
+    }
+  });
+
+  test("a negation in the keyword's own clause is still caught after an earlier sentence", () => {
+    assert.equal(accidentalClosers("Small change. This does not close #12.").length, 1);
+  });
+
   test("the offending line and text are reported, so the author can find it", () => {
     const found = accidentalClosers("intro\nmore\n> Closes #99 here");
 

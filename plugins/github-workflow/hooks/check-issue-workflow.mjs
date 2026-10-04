@@ -1084,9 +1084,10 @@ export function accidentalClosers(body) {
         reason = "inside a blockquote";
       } else if (inCodeSpan(line, m.index)) {
         reason = "inside a `code span`";
-      } else if (NEGATORS.test(before.slice(-40))) {
-        // Only the run-up matters: "This does not close #17" negates, "Closes #17. It does not
-        // fix the migration" does not.
+      } else if (NEGATORS.test(before.slice(-40).split(/[.!?;]\s+|\s(?:--|—|–)\s/).pop())) {
+        // Only the run-up within the keyword's own clause matters: "This does not close #17"
+        // negates; "Closes #17. It does not fix the migration" and "Not a breaking change.
+        // Closes #17" do not.
         reason = "negated -- the scanner does not read negations";
       }
 
