@@ -22,9 +22,9 @@ Plugin files used below:
 
 ```bash
 gh auth status
-gh repo view --json nameWithOwner,defaultBranchRef,viewerPermission,hasDiscussionsEnabled \
-  -q '"\(.nameWithOwner) default=\(.defaultBranchRef.name) permission=\(.viewerPermission) discussions=\(.hasDiscussionsEnabled)"'
-gh api "repos/{owner}/{repo}/private-vulnerability-reporting" -q .enabled
+gh repo view --json nameWithOwner,defaultBranchRef,viewerPermission,hasDiscussionsEnabled,visibility \
+  -q '"\(.nameWithOwner) default=\(.defaultBranchRef.name) permission=\(.viewerPermission) discussions=\(.hasDiscussionsEnabled) visibility=\(.visibility)"'
+gh api "repos/{owner}/{repo}/private-vulnerability-reporting" -q .enabled   # PUBLIC repositories only
 git rev-parse --show-toplevel
 ```
 
@@ -35,11 +35,12 @@ from there (`cd "$(git rev-parse --show-toplevel)"`).
 - Not a GitHub repository, or `gh` not authenticated → stop and say so.
 - `permission` below `WRITE` (`READ`, `TRIAGE`) → warn that creating labels will probably fail, and
   ask whether to continue preparing the files for a maintainer to commit.
-- Private vulnerability reporting `false` → the "Security vulnerability" contact link would
-  dead-end, and it tells reporters not to open a public issue. Plan (step 4) to point it at
+- Private vulnerability reporting `false`, or `visibility` not `PUBLIC` (the feature is public-only,
+  and the call answers 404) → the "Security vulnerability" contact link would dead-end, and it
+  tells reporters not to open a public issue. Plan (step 4) to point it at
   `https://github.com/<owner/name>/security/policy` when the repository has a `SECURITY.md` (at the
-  root, in `docs/` or in `.github/`), and to drop it otherwise. A non-zero exit (a private repository
-answers 404) → unknown: report it and ask which applies.
+  root, in `docs/` or in `.github/`), and to drop it otherwise. A public repository whose call
+  fails → unknown: report the error and ask which applies.
 - `.github/github-workflow.json` already exists → this is a **re-run**: show the current file and
   treat every step as an update. Labels are idempotent; files get a diff, never a blind overwrite.
 
@@ -173,8 +174,8 @@ cd ../adopt-github-workflow
 
 3. Copy the issue forms and the PR template. In `config.yml` replace `OWNER/REPO` with the
    repository, and **delete the Discussions contact link** when `hasDiscussionsEnabled` was false —
-   a link to a disabled Discussions tab is a 404. When private vulnerability reporting was false,
-   repoint or delete the Security link as planned in step 4; on a repoint, change its `about` to
+   a link to a disabled Discussions tab is a 404. When step 1 found the Security link would
+   dead-end, repoint or delete it as planned in step 4; on a repoint, change its `about` to
    say the policy explains how to report privately. Edit with your file tools, not `sed -i` (its
    flags differ between GNU and BSD).
 4. Any file that already existed: show the diff and get a yes for that file. Never overwrite blind.
