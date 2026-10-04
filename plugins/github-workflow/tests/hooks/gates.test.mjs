@@ -325,6 +325,22 @@ describe("PreToolUse — bodies the shell builds", () => {
     assert.equal(r.status, 0);
   });
 
+  // Expansions only add text: a literal negated keyword stays in the body whatever $USER holds.
+  test("guest: a negated keyword beside a $VAR in an inline body is still blocked", () => {
+    const r = runHook(pre(`gh pr create --title t --body "This does not close #12 for $USER."`, temp("guest")));
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /negated/);
+  });
+
+  test("guest: the same body saying Refs passes", () => {
+    assert.equal(runHook(pre(`gh pr create --title t --body "Refs #12 for $USER."`, temp("guest"))).status, 0);
+  });
+
+  test("guest: a keyword only inside a command substitution's own text is not judged", () => {
+    const cmd = `gh pr create --title t --body "Summary: $(printf 'does not close #%s' 12)"`;
+    assert.equal(runHook(pre(cmd, temp("guest"))).status, 0);
+  });
+
   test("adopted: an issue body written by a heredoc in the same command is judged", () => {
     const dir = repoDir(ADOPTED);
     const ok = `cat > issue.md <<'EOF'\n${RECORD}\nEOF\ngh issue create --title t --body-file issue.md`;

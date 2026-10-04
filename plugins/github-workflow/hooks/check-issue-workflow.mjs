@@ -923,7 +923,8 @@ export function bodySources(cmd, found) {
  * command: without it every argument is taken literally and every body file read from disk.
  *
  *   --body "$(cat <<'EOF' ... EOF)"   the heredoc opened on the gh command's own lines
- *   --body "$(cat F)", --body "$X"    {skip}: the shell builds it, and the text is not the body
+ *   --body "$(cat F)", --body "$X"    {skip, literal}: the shell builds it, and the text is not
+ *                                     the body; `literal` is what of it is written out as-is
  *   --body-file - <<'EOF'             that heredoc; with none, {skip}: stdin is unreadable
  *   --body-file F                     an earlier heredoc's `> F`, else F on disk -- unless the
  *                                     command writes F some other way first: {skip}, never the
@@ -947,10 +948,42 @@ export function resolveBody(args, cwd, sources = {}) {
   if (inline !== null) {
     if (!expands[inline.index]) return { text: inline.value };
     if (fed.length > 0) return { text: fed.map((h) => h.body).join("\n") };
-    return { skip: "body built by the shell" };
+    return { skip: "body built by the shell", literal: literalText(inline.value) };
   }
 
   return { text: "" }; // no body flag at all -- nothing was searched
+}
+
+/**
+ * The part of an expanded argument that reaches gh as written: the text with each `$( ... )` and
+ * backtick command substitution taken out, since its own text is a command, not body. `$NAME` and
+ * `${...}` stay: they only add text around what is literal. Used by the closing gate alone -- a
+ * literal `does not close #12` stays in the body whatever the expansions add, while the duplicate
+ * and deploy gates would block on a marker the expansion may well supply.
+ */
+function literalText(v) {
+  let out = "";
+  for (let i = 0; i < v.length; i++) {
+    if (v[i] === "`") {
+      const end = v.indexOf("`", i + 1);
+      if (end === -1) break;
+      out += " ";
+      i = end;
+    } else if (v[i] === "$" && v[i + 1] === "(") {
+      let depth = 0;
+      let j = i + 1;
+      for (; j < v.length; j++) {
+        if (v[j] === "(") depth++;
+        else if (v[j] === ")" && --depth === 0) break;
+      }
+      if (j >= v.length) break;
+      out += " ";
+      i = j;
+    } else {
+      out += v[i];
+    }
+  }
+  return out;
 }
 
 /** The contents `--body-file file` will hold when gh reads it. */
@@ -1606,14 +1639,16 @@ function preToolUse({ kind, action, args, cwd, context, adopted, gates, sources 
     : null;
 
   const body = resolveBody(args, cwd, sources);
-  if (body.skip) return warning;
 
   // Closing keywords act from PR descriptions (and default-branch commits), never from an
   // issue body, so issues are not checked here. Edits count: an edited body re-triggers it.
-  if (kind === "pr" && closingGateEnabled(process.env, gates)) {
-    const found = accidentalClosers(body.text);
+  // A body the shell builds is judged on its literal text, which the expansions cannot remove.
+  const closing = body.skip ? body.literal : body.text;
+  if (kind === "pr" && typeof closing === "string" && closingGateEnabled(process.env, gates)) {
+    const found = accidentalClosers(closing);
     if (found.length > 0) block(closingMessage(found));
   }
+  if (body.skip) return warning;
 
   if (kind === "pr" && action === "create" && adopted) {
     const deploy = gates.deployImpact;

@@ -569,6 +569,16 @@ describe("resolveBody — bodies the shell builds", () => {
     assert.ok(body(`gh issue create --body "\${BODY}"`).skip);
   });
 
+  // The closing gate judges what is literal in such a body: expansions only add text, and a
+  // literal `does not close #12` stays in it. A command substitution's own text is not the body.
+  test("an expanded inline body skips, but carries its literal text", () => {
+    const r = body(`gh pr create --body "This does not close #12 for $USER."`);
+    assert.ok(r.skip);
+    assert.equal(r.literal, "This does not close #12 for $USER.");
+    assert.equal(body("gh pr create --body \"Does not close #12, see `x`\"").literal, "Does not close #12, see  ");
+    assert.equal(body(`gh pr create --body "A $(printf 'does not close #%s' 12) B"`).literal, "A   B");
+  });
+
   test("a heredoc on an earlier line is not the gh command's body", () => {
     const cmd = `BODY=$(cat <<'EOF'\nRefs #12\nEOF\n)\ngh pr create --body "$BODY"`;
     assert.ok(body(cmd).skip);
