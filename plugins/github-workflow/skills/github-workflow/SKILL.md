@@ -468,7 +468,7 @@ adapt to the repo:
 |---|---|
 | Labels | The repo's **existing** labels and conventions. Never create labels, never run `bootstrap-labels.sh` |
 | Filing | Still ask first (rule 1), and still search all states first (§4.0) and show the operator what you found. Use the repo's own issue templates; the `Searched:` block goes in your proposal, and in the body only if the template has room |
-| Claiming | Still read the thread (§5.1). In a repo the operator does not maintain, **ask before posting** pick-up or implementation comments — many projects have their own etiquette. In one they maintain, post them |
+| Claiming | Still read the thread (§5.1). In a repo the operator does not maintain, **ask before posting** pick-up or implementation comments — many projects have their own etiquette. The same goes for self-assigning (§5.2) and `gh issue develop` (§5.4), which creates a branch in their repository: ask first. In one they maintain, post them |
 | Branches | The repo's documented naming convention, else §5.4's |
 | PRs | §7's closing-keyword rules unchanged — one keyword per issue, never beside a negation, a quote or code; labels per the Labels row above (the repo's own) |
 | Board | Only as the repo's own docs describe; never write a Status you were not told to |
