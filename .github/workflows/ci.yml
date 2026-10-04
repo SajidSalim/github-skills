@@ -1,0 +1,71 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: tests (${{ matrix.os }}, node ${{ matrix.node }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [20, 22]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Ensure jq
+        run: |
+          if ! command -v jq >/dev/null; then
+            if [ "$RUNNER_OS" = "Windows" ]; then choco install jq -y --no-progress; else sudo apt-get install -y jq; fi
+          fi
+          jq --version
+      - name: Bash suite
+        run: bash plugins/github-workflow/tests/run-tests.sh
+      - name: Node suite
+        run: node --test plugins/github-workflow/tests/hooks/*.test.mjs
+
+  bash32:
+    name: scripts under macOS /bin/bash 3.2
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Put /bin/bash first on PATH
+        run: |
+          mkdir -p "$RUNNER_TEMP/bash32"
+          ln -s /bin/bash "$RUNNER_TEMP/bash32/bash"
+          echo "$RUNNER_TEMP/bash32" >> "$GITHUB_PATH"
+      - name: Script suites
+        run: |
+          bash --version | head -1
+          for s in lint-issue-labels find-duplicates bootstrap-labels run-hook portability; do
+            bash plugins/github-workflow/tests/run-tests.sh --filter "$s"
+          done
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck the shipped scripts
+        run: shellcheck -S warning plugins/github-workflow/skills/github-workflow/scripts/*.sh plugins/github-workflow/hooks/run-hook.sh
+
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install -g @anthropic-ai/claude-code
+      - run: claude plugin validate plugins/github-workflow --strict
+      - run: claude plugin validate . --strict

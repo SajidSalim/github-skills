@@ -1,0 +1,61 @@
+name: Enhancement
+description: Existing behaviour made better, faster or clearer
+labels: ["type:enhancement", "status:needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Title** — the observable change, e.g. `Show the estimated delivery date on the order confirmation page`.
+        Not `Improve confirmation page`. ≤ 70 characters, no trailing period.
+
+        If a user would call the current behaviour **broken**, file a Bug instead.
+        If the product would gain a capability it does not have, file a Feature instead.
+
+        Triage must add `priority:` and at least one `area:` — this form cannot set them.
+
+  - type: textarea
+    id: current
+    attributes:
+      label: Current behaviour
+      description: What happens today, and where the friction is.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed change
+      description: What should happen instead, and why it is better.
+    validations:
+      required: true
+
+  - type: textarea
+    id: value
+    attributes:
+      label: Who benefits
+      description: Which role or user, how often they hit this, what it saves them.
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      value: |
+        **In:**
+        -
+
+        **Out:**
+        -
+    validations:
+      required: false
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      value: |
+        - [ ]
+        - [ ]
+    validations:
+      required: true

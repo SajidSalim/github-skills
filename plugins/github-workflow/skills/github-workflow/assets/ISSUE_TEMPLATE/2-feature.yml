@@ -1,0 +1,76 @@
+name: Feature
+description: A capability the product does not have today
+labels: ["type:feature", "status:needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Title** — the capability as a noun phrase, e.g. `Per-region shipping rates`.
+        Not `Implement shipping`. ≤ 70 characters, no trailing period.
+
+        **Feature or enhancement?** If this ships, does the product do something it could not do
+        before? Yes → feature. It does the same thing better → use the Enhancement template.
+
+        Triage must add `priority:` and at least one `area:` — this form cannot set them.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: >
+        The user need, in the user's terms — not the solution. If you cannot describe the problem
+        without naming your solution, the problem is not understood yet.
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What you intend to build, at a level someone can disagree with.
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Be generous with the out-list — it is what prevents the scope argument later.
+      value: |
+        **In:**
+        -
+
+        **Out:**
+        -
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: >
+        Each independently testable and observable from outside the code. Enough of them that
+        "done" is not a judgement call.
+      value: |
+        - [ ]
+        - [ ]
+    validations:
+      required: true
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: Dependencies and risks
+      description: Blocking issues, external parties, migrations, anything touching production data.
+    validations:
+      required: false
+
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: Requirement IDs, design docs, related issues, prior art.
+      placeholder: "REQ-SHP-04 (shipping spec §5.3) · related: #198"
+    validations:
+      required: false

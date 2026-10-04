@@ -1,0 +1,47 @@
+name: Chore / tech debt
+description: Dependencies, build, tooling, config, refactoring — no user-visible behaviour change
+labels: ["type:chore", "status:needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Title** — the action, e.g. `Bump the HTTP client library to 3.x`. Not `Deps`.
+        ≤ 70 characters, no trailing period.
+
+        Triage must add `priority:` and at least one `area:` — this form cannot set them.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What needs doing
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why now
+      description: What it unblocks, what breaks if it waits, or what risk it retires.
+    validations:
+      required: true
+
+  - type: textarea
+    id: behaviour
+    attributes:
+      label: Behaviour change
+      description: >
+        State explicitly that there is none, or describe exactly what changes. If behaviour changes,
+        this is not a chore — reclassify it.
+      placeholder: "None — internal only."
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      value: |
+        - [ ]
+        - [ ] Full test suite passes with no new failures
+    validations:
+      required: true

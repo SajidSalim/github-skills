@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "repo": "acme/shop",
+  "inFlightState": "labels",
+  "areas": ["api", "ui", "db", "auth", "infra", "integrations", "docs", "ci", "checkout", "catalog", "payments"],
+  "gates": {
+    "closingKeywords": true,
+    "duplicateSearch": true,
+    "labelTaxonomy": true,
+    "defaultBranch": true,
+    "discardChanges": true,
+    "deployImpact": {
+      "paths": ["migrations/**", "infra/**", "config/production.*"],
+      "doc": "docs/DEPLOY.md"
+    }
+  }
+}

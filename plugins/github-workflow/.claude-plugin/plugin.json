@@ -1,0 +1,25 @@
+{
+  "name": "github-workflow",
+  "displayName": "GitHub Workflow",
+  "version": "1.0.0",
+  "description": "A disciplined issue-to-PR workflow for coding agents on GitHub: search for duplicates before filing, claim via the comment thread, branch and PR without merging, label to a strict taxonomy, and close with a written record — with opt-in hooks that enforce it.",
+  "author": { "name": "SajidSalim", "url": "https://github.com/SajidSalim" },
+  "homepage": "https://github.com/SajidSalim/github-skills/tree/main/plugins/github-workflow",
+  "repository": "https://github.com/SajidSalim/github-skills",
+  "license": "MIT",
+  "keywords": ["github", "issues", "pull-requests", "labels", "triage", "project-board", "gh", "workflow"],
+  "userConfig": {
+    "closing_keyword_gate": {
+      "type": "boolean",
+      "title": "Accidental closing-keyword gate",
+      "description": "Block gh pr create/edit when the PR body contains a closing keyword GitHub would act on by accident (negated, quoted, or inside code). Applies in every repository.",
+      "default": true
+    },
+    "discard_gate": {
+      "type": "boolean",
+      "title": "Uncommitted-changes discard gate",
+      "description": "Ask before a git command discards uncommitted changes (git checkout -- <path>, git restore, git reset --hard, git clean -f, git switch --discard-changes, git stash drop/clear, git worktree remove --force) when something would be lost. Applies in every repository.",
+      "default": true
+    }
+  }
+}

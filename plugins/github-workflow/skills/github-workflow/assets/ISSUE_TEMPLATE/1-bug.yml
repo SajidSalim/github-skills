@@ -1,0 +1,119 @@
+name: Bug report
+description: Something behaves differently from how it is meant to behave
+labels: ["type:bug", "status:needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Title** — state the **symptom and the trigger**, not the fix. ≤ 70 characters, no trailing period.
+        Good: `Checkout returns 500 when the coupon code is blank`
+        Bad: `Fix checkout bug`
+
+        If severity is **Critical** or **High**, prefix the title with `[SEV-1]` or `[SEV-2]`.
+
+        **This form cannot apply every label.** It sets `type:bug` and `status:needs-triage` only —
+        whoever triages must add `severity:`, `priority:` and at least one `area:` by hand.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences. What breaks, for whom, under what condition.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      description: |
+        How bad it is when it happens — independent of when we plan to fix it.
+        Critical — production down, data loss, money wrong, security breach, no workaround.
+        High — core flow broken for a segment, tenant or role, painful workaround.
+        Medium — bounded misbehaviour, clear workaround.
+        Low — cosmetic, copy, rare edge case.
+      options:
+        - "Sev-1 — Critical"
+        - "Sev-2 — High"
+        - "Sev-3 — Medium"
+        - "Sev-4 — Low"
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Where, which version or commit, who is affected, when first seen.
+      placeholder: "Production · commit a1b2c3d · mobile-app customers, all regions · first seen 14 Aug 2026"
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: >
+        Numbered and exact, starting from a state anyone can reach. Include the data that matters —
+        "a cart whose coupon_code is an empty string", not "a cart". If you cannot reproduce it, say so here
+        and list what you tried.
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+      description: What should happen, and where that expectation comes from (spec, requirement ID, prior behaviour).
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual
+      description: What happens instead. Paste the verbatim error, status code or stack trace.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Logs, screenshots, a failing test, a request ID. Redact tokens, PII and customer data.
+    validations:
+      required: false
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: >
+        Blast radius — how many users, segments or tenants; whether a workaround exists; whether money
+        or data is at risk. This is what justifies the severity above.
+    validations:
+      required: true
+
+  - type: textarea
+    id: cause
+    attributes:
+      label: Suspected cause
+      description: Optional. Mark it clearly as a hypothesis. Never present a guess as a finding.
+    validations:
+      required: false
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Testable, observable, checkboxes. If two reasonable people could disagree that it is met, rewrite it.
+      value: |
+        - [ ]
+        - [ ] A regression test exists that fails on the default branch
+    validations:
+      required: true

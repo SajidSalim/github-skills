@@ -1,0 +1,23 @@
+
+repo:   acme/shop
+title:  Checkout returns 500 when the coupon code is blank
+terms:  blank · checkout · code · coupon   (derived from the title)
+found:  2 candidate(s)
+
+★ DECISION       4×  #142  coupon_code blank handling is deliberate
+                     → resolution:works-as-intended
+  OPEN           10×  #88  Checkout 500 on blank coupon_code
+
+  ★ DECISION       a human already adjudicated this. STOP — show the operator the link and the
+                   stated reason, and ask what changed. Never refile without an explicit yes.
+  ? CLOSED         closed with no resolution label. Read the thread: either a past fix (a new
+                   occurrence is a regression) or an undocumented decision.
+  ↻ CLOSED, FIXED  a new occurrence is a REGRESSION, not a duplicate. File it, link the original,
+                   and name the commit that fixed it the first time.
+    OPEN           possible duplicate. Add your evidence to that issue rather than filing a second.
+
+  N× is how many of the searches found it independently. Two agreeing beats one broad hit.
+  Record the outcome in the Searched: block — see references/duplicate-check.md.
+
+  1 hit(s) need the operator to weigh in before you file.
+
