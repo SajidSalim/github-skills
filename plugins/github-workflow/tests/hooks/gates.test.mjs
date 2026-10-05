@@ -1593,6 +1593,24 @@ describe("PreToolUse — branch gate, reftable", { skip: reftableSkip }, () => {
     passes(runHook(pre("git checkout nope && git commit -m x", dir)));
   });
 
+  // origin/HEAD lives in the reftable too, so a default branch other than main or master is asked
+  // of git as well.
+  test("a default branch named by origin/HEAD, here develop, asks", () => {
+    const dir = reftableRepo();
+    gitIn(dir, "update-ref", "refs/remotes/origin/develop", "HEAD");
+    gitIn(dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop");
+    gitIn(dir, "checkout", "-q", "-b", "develop");
+    assert.match(askOf(runHook(pre("git commit -m x", dir))), /run git commit on develop/);
+    const r = runHook({
+      hook_event_name: "PreToolUse", tool_name: "Edit", cwd: dir,
+      tool_input: { file_path: join(dir, "lib", "a.txt"), old_string: "a", new_string: "b" },
+    });
+    assert.match(askOf(r), /edit lib\/a\.txt on develop/);
+    gitIn(dir, "checkout", "-q", "-b", "feature");
+    assert.match(askOf(runHook(pre("git checkout develop && git commit -m x", dir))), /run git commit on develop/);
+    passes(runHook(pre("git checkout main && git commit -m x", dir)));
+  });
+
   test("a branch that shares its name with a directory is a branch switch, not a discard", () => {
     const dir = reftableRepo();
     gitIn(dir, "branch", "lib");

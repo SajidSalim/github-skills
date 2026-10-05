@@ -1817,8 +1817,13 @@ export function branchExists(gitDir, name, probe = {}) {
  * repository's refs/remotes/origin/HEAD says, else main and master. A linked worktree keeps its
  * refs in the repository's common directory, which its `commondir` file names. This is the
  * filter that keeps git from running on an edit to a branch that cannot be the default.
+ *
+ * A reftable repository has no origin/HEAD file, so there `ask` answers: a function returning
+ * defaultBranches' list, which runs git under SAFE_GIT and the shared deadline. Without `ask`, main
+ * and master.
  */
-export function defaultCandidates(gitDir) {
+export function defaultCandidates(gitDir, ask = null) {
+  if (usesReftable(commonDir(gitDir))) return ask ? ask() : ["main", "master"];
   try {
     const text = readFileSync(join(commonDir(gitDir), "refs", "remotes", "origin", "HEAD"), "utf8");
     const m = /^ref:\s*refs\/remotes\/origin\/(.+?)\s*$/.exec(text);
@@ -2208,10 +2213,20 @@ export function editAsk(payload, env = process.env, time = budget) {
   if (within(checkout.gitDir, file) || within(join(checkout.root, ".git"), file)) return null;
   if (!branchGateOn(checkout.root)) return null;
   const branch = checkoutBranch(checkout, () => resolveExecutable("git", env), time);
-  if (!branch || !defaultCandidates(checkout.gitDir).includes(branch)) return null;
+  if (!branch) return null;
+  // Asked of git once, whichever check needs it first: a reftable repository's candidates need it.
+  let defaults;
+  const defaultsOf = () => {
+    if (defaults === undefined) {
+      const exe = resolveExecutable("git", env);
+      defaults = exe ? defaultBranches(exe, checkout.root, time) : [];
+    }
+    return defaults;
+  };
+  if (!defaultCandidates(checkout.gitDir, defaultsOf).includes(branch)) return null;
 
   const git = resolveExecutable("git", env);
-  if (!git || !defaultBranches(git, checkout.root, time).includes(branch)) return null;
+  if (!git || !defaultsOf().includes(branch)) return null;
   const path = slash(relative(checkout.root, file));
   // Out of time, the file is taken as not ignored: the human is asked rather than not.
   if (!time.spent()) {
@@ -2325,7 +2340,7 @@ function branchAsk(g, branchOf, who, defaultsOf) {
   const checkout = checkoutAt(g.dir);
   if (!checkout || !branchGateOn(checkout.root)) return null;
   const branch = branchOf(checkout);
-  const candidates = defaultCandidates(checkout.gitDir);
+  const candidates = defaultCandidates(checkout.gitDir, () => defaultsOf(checkout.root));
 
   if (g.sub !== "push") {
     if (!branch || !candidates.includes(branch)) return null;

@@ -1478,6 +1478,25 @@ describe("checkoutAt and headBranch", () => {
     assert.deepEqual(defaultCandidates(wt), ["develop"]);
   });
 
+  // A reftable repository keeps origin/HEAD in the reftable: `ask` (git) answers there.
+  test("a reftable repository's candidates come from ask, read from extensions.refStorage as git does", () => {
+    const reftableBy = (config) => {
+      const git = temp("co");
+      writeFileSync(join(git, "config"), config);
+      return defaultCandidates(git, () => ["develop"])[0] === "develop";
+    };
+    assert.equal(reftableBy("[extensions]\n\trefStorage = reftable\n"), true);
+    assert.equal(reftableBy("[extensions] refStorage = reftable\n"), true, "on the header's line");
+    assert.equal(reftableBy("[Extensions]\n\tRefStorage = Reftable ; a comment\n"), true, "any case");
+    assert.equal(reftableBy("[extensions]\n\trefStorage = files\n\trefStorage = reftable\n"), true, "the last wins");
+    assert.equal(reftableBy("[extensions]\n\trefStorage = reftable\n\trefStorage = files\n"), false);
+    assert.equal(reftableBy("[core]\n\trefStorage = reftable\n"), false, "another section");
+    assert.equal(reftableBy("[extensions]\n\tobjectFormat = sha1\n"), false);
+    const git = temp("co");
+    writeFileSync(join(git, "config"), "[extensions]\n\trefStorage = reftable\n");
+    assert.deepEqual(defaultCandidates(git), ["main", "master"], "no ask: main and master");
+  });
+
   test("the branch HEAD names, and none when detached or unreadable", () => {
     const d = temp("co");
     writeFileSync(join(d, "HEAD"), "ref: refs/heads/feat/x\n");
