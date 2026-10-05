@@ -78,6 +78,32 @@ test_hooks_json_has_no_conditional_filter() {
   assert_eq 0 "$n"
 }
 
+# A `node` committed to the repository must never run: an empty or relative PATH entry names the
+# working directory, and the launcher runs on every Bash and Edit call without the model choosing.
+_plant_node() {
+  mkdir -p "$TEST_TMP/repo" "$TEST_TMP/empty"
+  printf '#!/bin/sh\necho PLANTED-NODE-RAN\n' >"$TEST_TMP/repo/node"
+  chmod +x "$TEST_TMP/repo/node"
+}
+
+test_a_planted_node_behind_an_empty_path_entry_never_runs() {
+  _plant_node
+  run_cmd bash -c 'cd "$1" && PATH="$2:" "$3" "$4"' _ \
+    "$TEST_TMP/repo" "$TEST_TMP/empty" "$BASH" "$PLUGIN_ROOT/hooks/run-hook.sh" <<<"$(_payload)"
+  assert_not_contains "$RUN_OUT" "PLANTED-NODE-RAN"
+  assert_eq 0 "$RUN_STATUS" "no absolute node: the hook does nothing"
+}
+
+test_a_relative_path_entry_is_skipped_for_the_real_node_after_it() {
+  _need_node || return 0
+  _plant_node
+  local real; real=$(command -v node)
+  run_cmd bash -c 'cd "$1" && PATH=".:$2" "$3" "$4"' _ \
+    "$TEST_TMP/repo" "${real%/*}" "$BASH" "$PLUGIN_ROOT/hooks/run-hook.sh" <<<"$(_payload)"
+  assert_not_contains "$RUN_OUT" "PLANTED-NODE-RAN"
+  assert_eq 2 "$RUN_STATUS" "the real node runs the hook"
+}
+
 test_the_launcher_runs_when_invoked_through_a_windows_backslash_path() {
   _need_node || return 0
   command -v cygpath >/dev/null 2>&1 || { echo "skipped: cygpath not on PATH"; return 0; }

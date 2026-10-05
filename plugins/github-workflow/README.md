@@ -100,9 +100,10 @@ protocol by committing `.github/github-workflow.json`, and everywhere else the p
 | **Guest** | no `.github/github-workflow.json` at the repository root | the ten rules, adapted to the repository's own labels and conventions — no labels are created, and protocol comments in a repository you do not maintain are posted only after asking; only the closing-keyword and discard gates are enforced |
 | **Adopted** | the file exists, and a command's `--repo` (if any) names the repository it describes | the full protocol; every gate below is enforced |
 
-The config is read from the root of the git repository, so commands run from a subdirectory are
-covered. A `gh … --repo X` command gets the repository gates only when `X` is the configured
-repository (URL and `HOST/OWNER/REPO` forms and any case match).
+The config is read from the root of the git repository the command runs in, after any `cd` before
+`gh` in the same command, so commands run from a subdirectory are covered. A `gh … --repo X` command gets the repository gates only when `X` is the configured
+repository (URL and `HOST/OWNER/REPO` forms and any case match). An edit target given by URL, and
+`GH_REPO`, name the repository the same way.
 
 ## Gates
 
@@ -145,7 +146,8 @@ The hook judges the body `gh` will send. A heredoc counts: `--body "$(cat <<'EOF
 `--body-file -` fed by a heredoc, and a `--body-file` the same command first writes with
 `cat > FILE <<'EOF'`. These bodies it cannot read, so they go through unchecked: one piped on stdin
 without a heredoc, `--web`, a `--body` the shell builds without a heredoc (`"$(cat FILE)"`,
-`"$BODY"`), and a `--body-file` the same command writes some other way (`echo … > FILE`, `tee`).
+`"$BODY"`; the closing-keyword gate still judges its literal text), and a `--body-file` the same
+command writes some other way (`echo … > FILE`, a `tee` not fed by a heredoc).
 On Windows, Git Bash paths such as `/tmp/pr.md` are translated before the file is read.
 
 The block and ask messages deliberately do not say how to switch a gate off. The switches are

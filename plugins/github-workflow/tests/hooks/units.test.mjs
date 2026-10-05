@@ -12,13 +12,13 @@ import { tmpdir } from "node:os";
 import { join, delimiter, resolve } from "node:path";
 
 import {
-  tokenize, stripHeredocs, findGhTarget, argValue, resolveBody, missingMarkers,
+  tokenize, stripHeredocs, findGhTarget, findGhTargets, argValue, resolveBody, missingMarkers,
   accidentalClosers, issueNumber, hasDeployImpact, changedFiles,
   parseConfig, loadRepoContext, normalizeRepo, isAdopted, closingOptionOff,
   closingGateEnabled, globToRegExp, deployTriggersIn, deployBases, LINTER, FIND_DUPLICATES,
   resolveExecutable, heredocBodies, bodySources, nativePath,
   gitCommands, discardForm, pushTargets, discardOptionOff, discardGateEnabled, checkoutAt, headBranch,
-  defaultCandidates, branchExists, selfCheck,
+  defaultCandidates, branchExists, selfCheck, ghRepo, absolutePathEnv, checkoutBranch, makeBudget, gitAsk,
 } from "../../hooks/check-issue-workflow.mjs";
 
 const temps = [];
@@ -134,6 +134,55 @@ describe("findGhTarget", () => {
 
   test("ignores an unrelated command", () => {
     assert.equal(findGhTarget(`git log --oneline`), null);
+  });
+
+  test("finds gh inside $(...), backticks and a subshell, with clean args", () => {
+    const want = ["--title", "t", "--body", "a b"];
+    assert.deepEqual(findGhTarget(`URL=$(gh pr create --title t --body "a b")`).args, want);
+    assert.deepEqual(findGhTarget(`echo "$(gh pr create --title t --body "a b")"`).args, want);
+    assert.deepEqual(findGhTarget("URL=`gh pr create --title t --body \"a b\"`").args, want);
+    assert.deepEqual(findGhTarget(`(gh pr create --title t --body "a b") && echo ok`).args, want);
+    assert.deepEqual(findGhTarget(`(gh pr create --title "a)" --body "")`).args, ["--title", "a)", "--body", ""]);
+  });
+
+  test("a subshell opened before gh closes on its last argument, which keeps its own text", () => {
+    assert.deepEqual(findGhTarget(`(cd sub && gh pr create --repo a/b)`).args, ["--repo", "a/b"]);
+    assert.deepEqual(findGhTarget(`( (cd sub && gh pr create -b "x)"))`).args, ["-b", "x)"]);
+    assert.deepEqual(findGhTarget(`(cd sub) && gh pr create -b x`).args, ["-b", "x"]);
+  });
+
+  test("findGhTargets lists every create|edit in shell order, not those inside a gh's own args", () => {
+    const all = findGhTargets(`N=$(gh issue create -b x) && GH_REPO=o/r gh pr create --body "$(gh issue view 1)"`);
+    assert.deepEqual(all.map((f) => `${f.kind} ${f.action}`), ["issue create", "pr create"]);
+    assert.deepEqual(all.map((f) => f.envRepo), [null, "o/r"]);
+    assert.deepEqual(findGhTargets(`gh pr view 1`), []);
+  });
+
+  test("never inside a # comment", () => {
+    assert.equal(findGhTarget("# later: `gh pr create -b \"x\"`\ngit status"), null);
+    assert.equal(findGhTarget("# gh pr create -b x\ngit status"), null);
+    assert.equal(findGhTarget("echo a#b && gh pr create -b x").action, "create");
+  });
+
+  test("never inside single quotes", () => {
+    assert.equal(findGhTarget(`echo '$(gh pr create --body x)'`), null);
+  });
+
+  test("moves -R before the action to the end of the args", () => {
+    const f = findGhTarget(`gh pr -R acme/other edit 7 --add-label x`);
+    assert.equal(f.action, "edit");
+    assert.deepEqual(f.args, ["7", "--add-label", "x", "-R", "acme/other"]);
+  });
+
+  test("with a cwd, the directory gh runs in", () => {
+    const cwd = temp("dir");
+    assert.equal(findGhTarget(`gh pr create`, cwd).dir, resolve(cwd));
+    assert.equal(findGhTarget(`cd sub && gh pr create`, cwd).dir, resolve(cwd, "sub"));
+    assert.equal(findGhTarget(`(cd sub && gh pr create -b x)`, cwd).dir, resolve(cwd, "sub"));
+    assert.equal(findGhTarget(`(cd sub); gh pr create`, cwd).dir, resolve(cwd));
+    assert.equal(findGhTarget(`URL=$(cd sub && gh pr create)`, cwd).dir, resolve(cwd, "sub"));
+    assert.equal(findGhTarget(`cd "$X" && gh pr create`, cwd).dir, null);
+    assert.equal(findGhTarget(`gh pr create`).dir, undefined);
   });
 });
 
@@ -287,6 +336,15 @@ describe("argValue", () => {
   test("returns null when absent", () => {
     assert.equal(argValue(["--title", "x"], ["--body"]), null);
   });
+  test("reads an attached short form", () => {
+    assert.equal(argValue(["-bsome text"], ["--body", "-b"]), "some text");
+    assert.equal(argValue(["-Bmain"], ["--body", "-b"]), null, "case matters");
+  });
+  test("never reads another flag's value as an attached short form", () => {
+    assert.equal(argValue(["--title", "-bump deps", "--body", "x"], ["--body", "-b"]), "x");
+    assert.equal(argValue(["-t", "-Rename"], ["--repo", "-R"]), null);
+    assert.equal(argValue(["--draft", "-bx"], ["--body", "-b"]), "x", "a boolean flag takes no value");
+  });
 });
 
 describe("missingMarkers", () => {
@@ -322,6 +380,39 @@ describe("issueNumber", () => {
   });
   test("edit: does not mistake a flag value for the target", () => {
     assert.equal(issueNumber("edit", ["--milestone", "3"], ""), null);
+  });
+});
+
+// The linter looks gh and jq up by bare name in the user's repository.
+describe("absolutePathEnv", () => {
+  test("drops empty and relative PATH entries, keeps the rest of the environment", () => {
+    const env = absolutePathEnv({ PATH: "/usr/bin::bin:./x:/opt/b", HOME: "/h" }, "linux");
+    assert.deepEqual(env, { PATH: "/usr/bin:/opt/b", HOME: "/h" });
+  });
+
+  test("on Windows, rewrites the Path key whatever its case", () => {
+    const env = absolutePathEnv({ Path: 'C:\\a;;rel;"C:\\b c"' }, "win32");
+    assert.deepEqual(env, { Path: 'C:\\a;"C:\\b c"' });
+  });
+
+  test("no PATH at all is left alone", () => {
+    assert.deepEqual(absolutePathEnv({ HOME: "/h" }, "linux"), { HOME: "/h" });
+  });
+});
+
+describe("ghRepo", () => {
+  test("--repo first, then the edit target's URL, then GH_REPO", () => {
+    const url = ["https://github.com/someone/else/issues/42", "--add-label", "bug"];
+    assert.equal(ghRepo(["7", "--repo", "a/b"], { GH_REPO: "c/d" }), "a/b");
+    assert.equal(ghRepo(url, { GH_REPO: "c/d" }), "someone/else");
+    assert.equal(ghRepo(["https://github.com/o/r/pull/3"], {}), "o/r");
+    assert.equal(ghRepo(["7"], { GH_REPO: "c/d" }), "c/d");
+    assert.equal(ghRepo(["7"], {}), null);
+    assert.equal(ghRepo(["7"], { GH_REPO: "" }), null);
+  });
+
+  test("a URL in a flag value is not the target", () => {
+    assert.equal(ghRepo(["7", "--body", "https://github.com/x/y/issues/1"], {}), null);
   });
 });
 
@@ -393,6 +484,34 @@ describe("accidentalClosers", () => {
     assert.deepEqual(accidentalClosers("Closes #12. It does not address the migration."), []);
   });
 
+  // The run-up is the keyword's own clause: a negation in the sentence before says nothing
+  // about it, and advising `Refs #N` there would leave the issue open.
+  test("a negation in an earlier sentence or clause does not negate the keyword", () => {
+    for (const body of [
+      "Not a breaking change. Closes #12",
+      "Small fix that can't regress checkout. Fixes #7",
+      "Without this, checkout returns 500. Fixes #9",
+      "No migration, doesn't touch the API -- closes #3",
+    ]) {
+      assert.deepEqual(accidentalClosers(body), [], `wrongly flagged: ${body}`);
+    }
+  });
+
+  test("a spaced dash, a closing quote or bracket after the stop, also end a clause", () => {
+    for (const body of [
+      "Doesn't touch the API — closes #3",
+      "Doesn't touch the API – closes #3",
+      "Not breaking.) Closes #3",
+      'It said "not yet." Closes #3',
+    ]) {
+      assert.deepEqual(accidentalClosers(body), [], `wrongly flagged: ${body}`);
+    }
+  });
+
+  test("a negation in the keyword's own clause is still caught after an earlier sentence", () => {
+    assert.equal(accidentalClosers("Small change. This does not close #12.").length, 1);
+  });
+
   test("the offending line and text are reported, so the author can find it", () => {
     const found = accidentalClosers("intro\nmore\n> Closes #99 here");
 
@@ -404,6 +523,23 @@ describe("accidentalClosers", () => {
     const body = "does not close #1\n`fixes #2`\n> resolves #3";
 
     assert.equal(accidentalClosers(body).length, 3);
+  });
+
+  // GitHub accepts a colon after the keyword and a cross-repository `owner/repo#N` target.
+  test("a keyword followed by a colon is caught", () => {
+    const found = accidentalClosers("This does not close: #12.");
+    assert.equal(found.length, 1);
+    assert.match(found[0].reason, /negated/);
+  });
+
+  test("a cross-repository owner/repo#N target is caught", () => {
+    const found = accidentalClosers("This does not close acme/shop#12.");
+    assert.equal(found.length, 1);
+    assert.match(found[0].reason, /negated/);
+  });
+
+  test("the colon and cross-repository forms in plain prose are still allowed", () => {
+    assert.deepEqual(accidentalClosers("Closes: #12\nFixes acme/shop#3"), []);
   });
 });
 
@@ -491,6 +627,12 @@ describe("changedFiles", () => {
   test("an empty base is unknown, not an empty diff", { skip: !gitAvailable }, () => {
     assert.equal(changedFiles(seededRepo(), ""), null);
   });
+
+  test("an option-like head is refused too", { skip: !gitAvailable }, () => {
+    const dir = seededRepo();
+    assert.equal(changedFiles(dir, "main", "--output=y"), null);
+    assert.equal(existsSync(join(dir, "y")), false);
+  });
 });
 
 describe("resolveBody", () => {
@@ -533,6 +675,16 @@ describe("resolveBody — bodies the shell builds", () => {
     assert.ok(body(`gh issue create --body "$BODY"`).skip);
     assert.ok(body("gh issue create --body \"`cat issue.md`\"").skip);
     assert.ok(body(`gh issue create --body "\${BODY}"`).skip);
+  });
+
+  // The closing gate judges what is literal in such a body: expansions only add text, and a
+  // literal `does not close #12` stays in it. A command substitution's own text is not the body.
+  test("an expanded inline body skips, but carries its literal text", () => {
+    const r = body(`gh pr create --body "This does not close #12 for $USER."`);
+    assert.ok(r.skip);
+    assert.equal(r.literal, "This does not close #12 for $USER.");
+    assert.equal(body("gh pr create --body \"Does not close #12, see `x`\"").literal, "Does not close #12, see  ");
+    assert.equal(body(`gh pr create --body "A $(printf 'does not close #%s' 12) B"`).literal, "A   B");
   });
 
   test("a heredoc on an earlier line is not the gh command's body", () => {
@@ -578,6 +730,44 @@ describe("resolveBody — bodies the shell builds", () => {
     writeFileSync(join(dir, "pr.md"), "stale\n");
     assert.ok(body(`printf 'x' > pr.md && gh pr create --body-file pr.md`, dir).skip);
     assert.ok(body(`echo x | tee pr.md; gh pr create --body-file pr.md`, dir).skip);
+  });
+
+  // Each heredoc belongs to the simple command that owns its marker, not to a line range.
+  test("A: a heredoc fed to a later command on gh's line is not gh's body", () => {
+    const r = body(`gh pr create --body "$(cat notes.md)"; cat <<'EOF' | wc -l\nThis does not close #12.\nEOF`);
+    assert.ok(r.skip);
+    assert.equal(accidentalClosers(r.literal ?? "").length, 0);
+  });
+
+  test("B: a quoted delimiter that is not a plain word still opens a heredoc", () => {
+    const cmd = `gh pr create --body "$(cat <<'END-OF-BODY'\nThis does not close #12.\nEND-OF-BODY\n)"`;
+    assert.deepEqual(body(cmd), { text: "This does not close #12." });
+    assert.deepEqual(body(`gh pr create --body "$(cat <<"a b"\nRefs #1\na b\n)"`), { text: "Refs #1" });
+  });
+
+  test("C: tee's file operand is the heredoc's target, whatever its stdout is redirected to", () => {
+    const dir = temp("body");
+    writeFileSync(join(dir, "pr.md"), "stale: Refs #12\n");
+    const r = body(`tee pr.md <<'EOF' >/dev/null\nThis does not close #12.\nEOF\ngh pr create --body-file pr.md`, dir);
+    assert.equal(r.text, "This does not close #12.\n");
+    assert.equal(heredocBodies(`tee -a x.md <<'EOF' >/dev/null\nx\nEOF`)[0].target, "x.md");
+    assert.equal(heredocBodies(`tee -a x.md <<'EOF' >/dev/null\nx\nEOF`)[0].append, true);
+  });
+
+  test("D: a heredoc written after gh runs is not what gh read", () => {
+    const dir = temp("body");
+    writeFileSync(join(dir, "pr2.md"), "Refs #12\n");
+    const r = body(`gh pr create --body-file pr2.md && cat > pr2.md <<'EOF'\nThis does not close #12.\nEOF`, dir);
+    assert.deepEqual(r, { text: "Refs #12\n" });
+  });
+
+  test("a heredoc piped into gh's stdin is its --body-file - body", () => {
+    assert.deepEqual(body(`cat <<'EOF' | gh pr create --body-file -\nRefs #12\nEOF`), { text: "Refs #12" });
+  });
+
+  test("so is one relayed through the pipeline, tee included", () => {
+    const cmd = `cat <<'A' | tee pr.md | gh pr create --body-file -\nThis does not close #12.\nA`;
+    assert.equal(accidentalClosers(body(cmd).text ?? "").length, 1);
   });
 
   test("a heredoc written to another file does not stand in for the body file", () => {
@@ -1146,6 +1336,61 @@ describe("discard gate switches", () => {
 
 // The branch gate runs on every Edit and Write in every repository, so it finds the checkout and
 // its branch by reading files, never by spawning git.
+// Claude Code allows the hook 15 s and runs the command anyway past that: the ask gates' git
+// probes share one deadline, and once it has passed they stop probing and ask with the command.
+describe("makeBudget", () => {
+  test("each spawn gets at most its own cap and never more than what is left", () => {
+    let t = 1_000;
+    const b = makeBudget(10_000, () => t);
+    assert.equal(b.timeout(5_000), 5_000);
+    assert.equal(b.spent(), false);
+    t += 7_000;
+    assert.equal(b.timeout(5_000), 3_000);
+    t += 3_000;
+    assert.equal(b.spent(), true);
+    assert.ok(b.timeout(5_000) >= 1, "a spawn timeout of 0 would mean none at all");
+  });
+
+  test("past the deadline, the discard gate asks with the command alone", { skip: !gitAvailable }, () => {
+    const dir = temp("budget");
+    const git = (...a) => spawnSync("git", a, { cwd: dir, encoding: "utf8" });
+    git("init", "-q", "-b", "main");
+    mkdirSync(join(dir, "lib"));
+    writeFileSync(join(dir, "lib", "a.txt"), "a\n");
+    git("add", "-A");
+    git("-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "seed", "--no-verify");
+    writeFileSync(join(dir, "lib", "a.txt"), "b\n");
+
+    const fresh = gitAsk("git checkout -- lib", dir, {}, process.env, makeBudget(10_000));
+    assert.match(fresh, /lib\/a\.txt/);
+    let t = 0;
+    const spent = makeBudget(10_000, () => t);
+    t = 10_000;
+    const late = gitAsk("git checkout -- lib", dir, {}, process.env, spent);
+    assert.match(late, /could not tell which/);
+    assert.doesNotMatch(late, /lib\/a\.txt/);
+  });
+});
+
+describe("checkoutBranch", () => {
+  const reftable = gitAvailable && spawnSync("git", ["init", "-q", "--ref-format=reftable", temp("probe")]).status === 0;
+
+  test("reads HEAD from the file, without git, in a files-backend repository", () => {
+    const d = temp("co");
+    mkdirSync(join(d, ".git"));
+    writeFileSync(join(d, ".git", "HEAD"), "ref: refs/heads/main\n");
+    assert.equal(checkoutBranch(checkoutAt(d), () => assert.fail("git must not run")), "main");
+  });
+
+  test("asks git in a reftable repository, whose HEAD file is a placeholder", { skip: !reftable }, () => {
+    const d = temp("reftable");
+    spawnSync("git", ["init", "-q", "--ref-format=reftable", "-b", "main", d]);
+    assert.equal(headBranch(join(d, ".git")), ".invalid");
+    assert.equal(checkoutBranch(checkoutAt(d), () => resolveExecutable("git")), "main");
+    assert.equal(checkoutBranch(checkoutAt(d), () => null), null, "no git: unknown, which passes");
+  });
+});
+
 describe("checkoutAt and headBranch", () => {
   test("a .git directory", () => {
     const d = temp("co");

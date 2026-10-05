@@ -19,7 +19,9 @@
  *                                      -> exit 2 carrying the report. Adopted repos.
  *
  * "Adopted" means the repository has .github/github-workflow.json and, when the command names
- * a repo with --repo, that it is the repo the config describes. Everything else is guest mode,
+ * a repo -- with --repo, an edit target's URL, or GH_REPO -- that it is the repo the config
+ * describes. A gh command's repository is the checkout it runs in, after any `cd` before it in the
+ * same command; every gh create|edit in a command is judged. Everything else is guest mode,
  * where only the closing-keyword and discard gates run. For an edit, the repository is the one
  * holding the FILE, never the session's cwd: a subagent in a worktree can write into the main
  * checkout, and that is the case the branch gate exists for.
@@ -49,7 +51,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, existsSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { resolve, join, dirname, isAbsolute, relative } from "node:path";
+import { resolve, join, dirname, isAbsolute, relative, win32, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const PLUGIN_ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -178,6 +180,12 @@ export function tokenize(cmd) {
       continue;
     }
 
+    // An unquoted `#` starting a word starts a comment, which runs to the end of the line.
+    if (c === "#" && !started) {
+      while (i < cmd.length && cmd[i] !== "\n") i++;
+      continue;
+    }
+
     const two = cmd.slice(i, i + 2);
     if (two === "&&" || two === "||") {
       flush();
@@ -214,12 +222,12 @@ export function stripHeredocs(cmd) {
   return scanHeredocs(cmd, () => " ").text;
 }
 
-// `<<EOF`, `<<-EOF`, `<<'EOF'`, `<<"EOF"`.
+// `<<EOF`, `<<-EOF`, `<<'EOF'`, `<<"EOF"`; a quoted delimiter may be any word, `<<'END-OF-BODY'`.
 //
 // Both guards are load-bearing against `<<<"bar"`: without the lookahead the first two `<`
 // match and the third breaks it, but without the lookbehind the LAST two `<` match and `"bar"`
 // reads as a quoted delimiter. A test caught exactly that.
-const OPENER = /(?<!<)<<(?!<)(-?)[ \t]*(?:'([A-Za-z_]\w*)'|"([A-Za-z_]\w*)"|([A-Za-z_]\w*))/g;
+const OPENER = /(?<!<)<<(?!<)(-?)[ \t]*(?:'([^'\n]+)'|"([^"\n]+)"|([A-Za-z_]\w*))/g;
 
 /**
  * The command with each heredoc body and terminator removed and each opener replaced by
@@ -288,12 +296,28 @@ function redirectsIn(words) {
   return out;
 }
 
+/** Whether a word names `tee`, as a command does: `tee`, or a path to it. */
+const isTee = (v) => v.replace(/\\/g, "/").split("/").pop() === "tee";
+
 /**
- * The heredocs in a command, `[{ delim, target, append, body, line }]`.
+ * The files a `tee` simple command writes its input to: its operands, as `{ path, append }`
+ * (-a/--append). Its own redirects are left to redirectsIn.
+ */
+function teeTargets(simple, text) {
+  const { words } = plainWords(simple, text);
+  if (words.length === 0 || !isTee(words[0].v)) return [];
+  const append = words.some((w) => w.v === "--append" || /^-[a-z]*a[a-z]*$/i.test(w.v));
+  return words.slice(1).filter((w) => !w.v.startsWith("-")).map((w) => ({ path: w.v, append }));
+}
+
+/**
+ * The heredocs in a command, `[{ n, delim, target, targets, append, body, line, at }]`.
  *
- * `target` is the file the heredoc's own command writes with `> FILE` or `>> FILE` (`append`),
- * quotes removed, else null -- a heredoc inside `--body "$(cat <<'EOF' ...)"` has none. `line`
- * is the opener's line in `cmd`.
+ * `targets` are the files the heredoc's own command writes it to: `> FILE` or `>> FILE`, and a
+ * `tee`'s operands, each `{ path, append }`, quotes removed. `target` and `append` are the first
+ * of them, or null and false -- a heredoc inside `--body "$(cat <<'EOF' ...)"` has none. `line`
+ * is the opener's line in `cmd`, and `at` its marker's offset in the scanned text findGhTarget
+ * reports offsets in.
  */
 export function heredocBodies(cmd) {
   const scan = scanHeredocs(cmd, markOf);
@@ -302,13 +326,20 @@ export function heredocBodies(cmd) {
     const ids = words.map((w) => MARK.exec(w.v)?.[1]).filter((id) => id !== undefined);
     if (ids.length === 0) continue;
     const r = redirectsIn(words).at(-1);
-    for (const id of ids) targets.set(Number(id), r);
+    const all = [...teeTargets(words, scan.text), ...(r ? [r] : [])];
+    for (const id of ids) targets.set(Number(id), all);
   }
-  return scan.docs.map((d, n) => ({
-    ...d,
-    target: targets.get(n)?.path ?? null,
-    append: targets.get(n)?.append ?? false,
-  }));
+  return scan.docs.map((d, n) => {
+    const all = targets.get(n) ?? [];
+    return {
+      n,
+      ...d,
+      target: all[0]?.path ?? null,
+      append: all[0]?.append ?? false,
+      targets: all,
+      at: scan.text.indexOf(`__ghwf_heredoc_${n}__`),
+    };
+  });
 }
 
 /**
@@ -320,7 +351,7 @@ function writesIn(toks) {
   for (const words of simpleCommands(toks)) {
     if (words.length === 0 || words.some((w) => MARK.test(w.v))) continue;
     for (const r of redirectsIn(words)) files.push(r.path);
-    if (words[0].v.replace(/\\/g, "/").split("/").pop() === "tee") {
+    if (isTee(words[0].v)) {
       for (const w of words.slice(1)) if (!w.v.startsWith("-") && !/^\d*>/.test(w.v)) files.push(w.v);
     }
   }
@@ -332,61 +363,332 @@ function writesIn(toks) {
  *
  * Returns its kind, action and own args; `expands`, parallel to args, true where the shell
  * expands that argument; `line` and `endLine`, the lines of `cmd` the gh command spans (a
- * `--body "$(cat <<'EOF'` heredoc opens inside that range); and `writes`, the files the command
- * writes by redirect or `tee` before gh runs.
+ * `--body "$(cat <<'EOF'` heredoc opens inside that range); `at` and `end`, its offsets in the
+ * scanned text (heredocBodies' `at` is in the same terms); `piped`, the heredocs of a command
+ * piped into it; and `writes`, the files the command writes by redirect or `tee` before gh runs.
+ *
+ * Found where the shell runs it: as a command of its own, in a subshell `(gh ...)`, or inside a
+ * command substitution -- `URL=$(gh pr create ...)`, `echo "$(gh ...)"`, backticks -- but never
+ * in single quotes, which run nothing. A `-R`/`--repo` between the kind and the action
+ * (`gh pr -R o/r create`) is moved to the end of the args.
+ *
+ * With `cwd`, also `dir`: the directory gh runs in, following any `cd` before it in the same
+ * command, or null when that cannot be known (a `cd "$X"`). `envRepo` is a `GH_REPO=x` assignment
+ * written before gh in its own command, or null.
  */
-export function findGhTarget(cmd) {
+export function findGhTarget(cmd, cwd) {
+  return findGhTargets(cmd, cwd)[0] ?? null;
+}
+
+/** Every `gh issue|pr create|edit` in `cmd`, in the order the shell meets them, as findGhTarget. */
+export function findGhTargets(cmd, cwd) {
   const scan = scanHeredocs(cmd, markOf);
-  const toks = tokenize(scan.text);
   const lineAt = (offset) => scan.lineOf[(scan.text.slice(0, offset).match(/\n/g) || []).length];
+  const hits = [];
+  ghIn(scan.text, 0, scan.text.length, [], hits, 0);
+  hits.sort((x, y) => x.t.at - y.t.at);
+
+  return hits.map(({ toks, i, t, kind, action, args, expands, last, levels, envRepo }) => {
+    const found = {
+      kind,
+      action,
+      args,
+      expands,
+      envRepo,
+      line: lineAt(t.at),
+      endLine: lineAt(last.end - 1),
+      at: t.at,
+      end: last.end,
+      piped: pipedHeredocs(toks, i),
+      writes: writesIn(tokenize(scan.text).filter((w) => w.end <= t.at)),
+    };
+    if (typeof cwd === "string" && cwd) {
+      let dir = resolve(cwd);
+      levels.forEach((level, k) => {
+        dir = dirAt(scan.text, level.from, level.to, k + 1 < levels.length ? levels[k + 1].from : t.at, dir);
+      });
+      found.dir = dir;
+    }
+    return found;
+  });
+}
+
+// Command substitutions nested deeper than this are not searched: no real command needs it, and
+// the search recurses.
+const MAX_NESTING = 32;
+
+/**
+ * Every `gh issue|pr create|edit` in `text[from, to)`, pushed onto `hits`, looking inside command
+ * substitutions as well. `levels` are the ranges searched so far, outermost first.
+ */
+function ghIn(text, from, to, levels, hits, depth) {
+  if (depth > MAX_NESTING) return;
+  const here = [...levels, { from, to }];
+  const toks = tokenize(text.slice(from, to)).map((t) => ({ ...t, at: t.at + from, end: t.end + from }));
+  const spans = substitutionSpans(text, from, to);
+  const tried = new Set();
 
   for (let i = 0; i < toks.length; i++) {
     const t = toks[i];
     if (t.op) continue;
 
-    const base = t.v.replace(/\\/g, "/").split("/").pop();
+    // A token inside a command substitution is that command's, and is judged there.
+    const span = spans.find((s) => t.at < s.to && t.end > s.from);
+    if (span) {
+      if (!tried.has(span)) {
+        tried.add(span);
+        ghIn(text, span.from, span.to, here, hits, depth + 1);
+      }
+      continue;
+    }
+
+    // A subshell's `(` sticks to the word it opens: `(gh pr create ...)`.
+    const raw = text.slice(t.at, t.end);
+    const opens = /^\(*/.exec(raw)[0].length;
+    const word = t.v.slice(opens);
+    const base = word.replace(/\\/g, "/").split("/").pop();
     if (base !== "gh" && base !== "gh.exe") continue;
 
     const a = toks[i + 1];
-    const b = toks[i + 2];
     if (!a || a.op || (a.v !== "issue" && a.v !== "pr")) continue;
+    // gh takes -R/--repo before the action as well as after it.
+    let j = i + 2;
+    const moved = [];
+    while (j < toks.length && !toks[j].op) {
+      const v = toks[j].v;
+      if ((v === "-R" || v === "--repo") && toks[j + 1] && !toks[j + 1].op) {
+        moved.push(toks[j], toks[j + 1]);
+        j += 2;
+      } else if (v.startsWith("--repo=") || /^-R./.test(v)) {
+        moved.push(toks[j]);
+        j++;
+      } else break;
+    }
+    const b = toks[j];
     if (!b || b.op || (b.v !== "create" && b.v !== "edit")) continue;
 
     const args = [];
     const expands = [];
     let last = b;
-    for (let j = i + 3; j < toks.length && !toks[j].op; j++) {
-      last = toks[j];
-      if (MARK.test(toks[j].v)) continue; // a heredoc operator, not an argument
-      args.push(toks[j].v.replace(MARKS, " "));
-      expands.push(toks[j].expands);
+    // Subshells open around gh: its own `(gh`, and any opened earlier, `(cd x && gh ...)`.
+    const around = opens + shellAt(text, from, to, t.at, null).depth;
+    let open = around;
+    let k = j + 1;
+    for (; k < toks.length && !toks[k].op; k++) {
+      last = toks[k];
+      if (MARK.test(toks[k].v)) continue; // a heredoc operator, not an argument
+      let v = toks[k].v;
+      let rest = text.slice(toks[k].at, toks[k].end);
+      // The `)` closing the subshell gh opened sticks to its last word: `(gh pr create -b x)`.
+      if (open > 0 && /\)$/.test(rest)) {
+        const closes = Math.min(open, /\)*$/.exec(rest)[0].length);
+        v = v.slice(0, v.length - closes);
+        rest = rest.slice(0, rest.length - closes);
+        open -= closes;
+      }
+      if (rest !== "") {
+        args.push(v.replace(MARKS, " "));
+        expands.push(toks[k].expands);
+      }
+      if (around > 0 && open === 0) break;
     }
-    return {
-      kind: a.v,
-      action: b.v,
-      args,
-      expands,
-      line: lineAt(t.at),
-      endLine: lineAt(last.end - 1),
-      writes: writesIn(toks.slice(0, i)),
-    };
+    for (const m of moved) {
+      args.push(m.v);
+      expands.push(m.expands);
+    }
+    // `GH_REPO=o/r gh ...` (or after `env`) names the repository for this command alone.
+    let envRepo = null;
+    for (let p = i - 1; p >= 0 && !toks[p].op; p--) {
+      const m = /^GH_REPO=(.*)$/s.exec(toks[p].v.replace(/^\(+/, ""));
+      if (m && m[1].trim() !== "") {
+        envRepo = m[1].trim();
+        break;
+      }
+    }
+    hits.push({ toks, i, t, kind: a.v, action: b.v, args, expands, last, levels: here, envRepo });
+    // Its arguments' substitutions are its body's business, not separate gh commands to judge.
+    for (const s of spans) if (s.from < last.end && s.to > t.at) tried.add(s);
+    i = k;
   }
 
-  return null;
+  for (const s of spans) {
+    if (tried.has(s)) continue;
+    ghIn(text, s.from, s.to, here, hits, depth + 1);
+  }
 }
 
-/** Where `--name X` or `--name=X` is, as {index, value} -- index of the value's token -- or null. */
+/**
+ * The command substitutions in `text[from, to)` the shell runs, outermost only, as the ranges of
+ * their contents: `$( ... )` and backticks, outside single quotes and escapes. An unterminated one
+ * ends the search.
+ */
+function substitutionSpans(text, from, to) {
+  const spans = [];
+  let dq = false;
+  for (let i = from; i < to; i++) {
+    const c = text[i];
+    if (c === "\\") {
+      i++;
+    } else if (c === "'" && !dq) {
+      const e = text.indexOf("'", i + 1);
+      if (e === -1 || e >= to) break;
+      i = e;
+    } else if (c === '"') {
+      dq = !dq;
+    } else if (c === "#" && !dq && (i === from || /[\s;&|(]/.test(text[i - 1]))) {
+      const e = text.indexOf("\n", i);
+      if (e === -1 || e >= to) break;
+      i = e; // a comment runs nothing
+    } else if (c === "`") {
+      const e = closeBacktick(text, i + 1, to);
+      if (e === -1) break;
+      spans.push({ from: i + 1, to: e });
+      i = e;
+    } else if (c === "$" && text[i + 1] === "(") {
+      const e = closeParen(text, i + 2, to);
+      if (e === -1) break;
+      spans.push({ from: i + 2, to: e });
+      i = e;
+    }
+  }
+  return spans;
+}
+
+/** The index of the backtick closing one opened before `i`, or -1. */
+function closeBacktick(text, i, to) {
+  for (; i < to; i++) {
+    if (text[i] === "\\") i++;
+    else if (text[i] === "`") return i;
+  }
+  return -1;
+}
+
+/** The index of the `)` closing a `$(` or `(` opened before `i`, or -1; quotes inside are skipped. */
+function closeParen(text, i, to) {
+  let depth = 1;
+  for (; i < to; i++) {
+    const c = text[i];
+    if (c === "\\") {
+      i++;
+    } else if (c === "'") {
+      const e = text.indexOf("'", i + 1);
+      if (e === -1 || e >= to) return -1;
+      i = e;
+    } else if (c === '"') {
+      const e = closeDq(text, i + 1, to);
+      if (e === -1) return -1;
+      i = e;
+    } else if (c === "`") {
+      const e = closeBacktick(text, i + 1, to);
+      if (e === -1) return -1;
+      i = e;
+    } else if (c === "(") {
+      depth++;
+    } else if (c === ")" && --depth === 0) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+/** The index of the `"` closing a double-quoted string opened before `i`, or -1. */
+function closeDq(text, i, to) {
+  for (; i < to; i++) {
+    const c = text[i];
+    if (c === "\\") {
+      i++;
+    } else if (c === '"') {
+      return i;
+    } else if (c === "$" && text[i + 1] === "(") {
+      const e = closeParen(text, i + 2, to);
+      if (e === -1) return -1;
+      i = e;
+    } else if (c === "`") {
+      const e = closeBacktick(text, i + 1, to);
+      if (e === -1) return -1;
+      i = e;
+    }
+  }
+  return -1;
+}
+
+/**
+ * The directory the shell is in when it reaches offset `at` within `text[from, to)`, starting in
+ * `dir`: each `cd`/`pushd` before it followed, a subshell's undone when it closes, `popd` unknown.
+ * Null once it cannot be known.
+ */
+function dirAt(text, from, to, at, dir) {
+  return shellAt(text, from, to, at, dir).dir;
+}
+
+/**
+ * dirAt's walk, returning `{ dir, depth }`: `depth` the subshells still open where the command at
+ * `at` starts -- `(cd x && gh ...)` is one.
+ */
+function shellAt(text, from, to, at, dir) {
+  const toks = tokenize(text.slice(from, to)).map((t) => ({ ...t, at: t.at + from, end: t.end + from }));
+  const saved = [];
+  for (const simple of simpleCommands(toks)) {
+    if (simple.length === 0) continue;
+    if (simple[0].at >= at) break;
+    const { words, opens, closes } = plainWords(simple, text);
+    for (let n = 0; n < opens; n++) saved.push(dir);
+    while (words.length > 0 && KEYWORDS.has(words[0].v)) words.shift();
+    const head = words[0]?.v;
+    if (head === "cd" || head === "pushd") dir = cdTarget(dir, words.slice(1));
+    else if (head === "popd") dir = null;
+    // A command that reaches past `at` is the one gh runs in: its own close has not happened yet.
+    if (simple.at(-1).end > at) break;
+    for (let n = 0; n < closes && saved.length > 0; n++) dir = saved.pop();
+  }
+  return { dir, depth: saved.length };
+}
+
+/**
+ * The heredocs fed to the pipeline that ends in `toks[i]`'s command: `cat <<'EOF' | gh ...`, or
+ * relayed on, `cat <<'EOF' | tee pr.md | gh ...`.
+ */
+function pipedHeredocs(toks, i) {
+  const ids = [];
+  let k = i - 1;
+  while (toks[k]?.op && toks[k].v === "|") {
+    for (k--; k >= 0 && !toks[k].op; k--) {
+      for (const m of toks[k].v.matchAll(/__ghwf_heredoc_(\d+)__/g)) ids.push(Number(m[1]));
+    }
+  }
+  return ids;
+}
+
+/**
+ * Where `--name X`, `--name=X` or, for a one-letter name, `-nX` is, as {index, value} -- index of
+ * the value's token -- or null.
+ */
 function argAt(args, names) {
   for (let i = 0; i < args.length; i++) {
+    // `--title "-bump deps"`: a word that is another flag's value is never an attached form.
+    const isValue = i > 0 && takesValue(args[i - 1]);
     for (const n of names) {
       if (args[i] === n) return { index: i + 1, value: args[i + 1] ?? "" };
       if (args[i].startsWith(n + "=")) return { index: i, value: args[i].slice(n.length + 1) };
+      if (!isValue && /^-[A-Za-z]$/.test(n) && args[i].length > 2 && args[i].startsWith(n)) {
+        return { index: i, value: args[i].slice(2) };
+      }
     }
   }
   return null;
 }
 
-/** Value of `--name X` or `--name=X`, or null when absent. */
+// The flags of gh issue|pr create|edit that take no value.
+const GH_BOOLEAN = new Set([
+  "--draft", "-d", "--fill", "-f", "--fill-first", "--fill-verbose", "--web", "-w", "--dry-run",
+  "--no-maintainer-edit", "--remove-milestone", "--editor", "-e",
+]);
+
+/** Whether `word` is a flag whose value is the next word: `--title`, `-t`; not `--x=v`, `-tX`. */
+const takesValue = (word) =>
+  /^-[A-Za-z]$|^--[^=]+$/.test(word) && !GH_BOOLEAN.has(word);
+
+/** Value of `--name X`, `--name=X` or `-nX`, or null when absent. */
 export function argValue(args, names) {
   return argAt(args, names)?.value ?? null;
 }
@@ -864,8 +1166,8 @@ export function resolveExecutable(name, env = process.env, platform = process.pl
   const win = platform === "win32";
   const exts = win ? [".exe", ".com"] : [""];
   for (const entry of path.split(win ? ";" : ":")) {
-    const dir = entry.replace(/^"(.*)"$/, "$1");
-    if (!dir || !isAbsolute(dir)) continue;
+    const dir = absoluteEntry(entry, platform);
+    if (!dir) continue;
     for (const ext of exts) {
       const file = join(dir, name + ext);
       try {
@@ -876,6 +1178,27 @@ export function resolveExecutable(name, env = process.env, platform = process.pl
     }
   }
   return null;
+}
+
+/** A PATH entry's directory, quotes removed, when it is absolute on `platform`; else null. */
+function absoluteEntry(entry, platform = process.platform) {
+  const dir = entry.replace(/^"(.*)"$/, "$1");
+  return dir && (platform === "win32" ? win32 : posix).isAbsolute(dir) ? dir : null;
+}
+
+/**
+ * A copy of `env` whose PATH keeps only absolute entries, for a child the hook spawns in the
+ * user's repository: that child looks programs up by bare name (the linter runs gh and jq), and
+ * an empty or relative entry would let the repository supply them. Whatever case the variable's
+ * name has on Windows, that one key is rewritten.
+ */
+export function absolutePathEnv(env = process.env, platform = process.platform) {
+  const out = { ...env };
+  const key = Object.keys(out).find((k) => (platform === "win32" ? /^path$/i.test(k) : k === "PATH"));
+  if (key === undefined || typeof out[key] !== "string") return out;
+  const sep = platform === "win32" ? ";" : ":";
+  out[key] = out[key].split(sep).filter((e) => absoluteEntry(e, platform) !== null).join(sep);
+  return out;
 }
 
 // ---------------------------------------------------------------- the body checks
@@ -905,13 +1228,19 @@ export function nativePath(file, { platform = process.platform, env = process.en
 
 /**
  * What the shell will feed the gh command `found` in `cmd`, for resolveBody: the heredocs that
- * run before or with it (`own` when opened on the gh command's own lines), the files the command
- * writes before gh by other means, and which arguments the shell expands.
+ * run before or with it, the files the command writes before gh by other means, and which
+ * arguments the shell expands.
+ *
+ * A heredoc belongs to the simple command whose text holds its marker, not to a line: `own` when
+ * that is the gh command itself (or a command piped into it), and a write only when it comes
+ * before gh. One on gh's line that feeds a later command (`; cat <<'EOF' | wc -l`), or writes a
+ * file after gh has read it (`&& cat > pr.md <<'EOF'`), is no part of the body.
  */
 export function bodySources(cmd, found) {
+  const piped = found.piped ?? [];
   const heredocs = heredocBodies(cmd)
-    .filter((h) => h.line <= found.endLine)
-    .map((h) => ({ ...h, own: h.line >= found.line }));
+    .filter((h) => h.at < found.end)
+    .map((h) => ({ ...h, own: h.at >= found.at || piped.includes(h.n) }));
   return { heredocs, writes: found.writes ?? [], expands: found.expands ?? [] };
 }
 
@@ -923,7 +1252,8 @@ export function bodySources(cmd, found) {
  * command: without it every argument is taken literally and every body file read from disk.
  *
  *   --body "$(cat <<'EOF' ... EOF)"   the heredoc opened on the gh command's own lines
- *   --body "$(cat F)", --body "$X"    {skip}: the shell builds it, and the text is not the body
+ *   --body "$(cat F)", --body "$X"    {skip, literal}: the shell builds it, and the text is not
+ *                                     the body; `literal` is what of it is written out as-is
  *   --body-file - <<'EOF'             that heredoc; with none, {skip}: stdin is unreadable
  *   --body-file F                     an earlier heredoc's `> F`, else F on disk -- unless the
  *                                     command writes F some other way first: {skip}, never the
@@ -933,7 +1263,7 @@ export function resolveBody(args, cwd, sources = {}) {
   const { heredocs = [], writes = [], expands = [] } = sources;
   if (hasFlag(args, WEB_FLAGS)) return { skip: "--web: a human completes the form" };
 
-  // What feeds gh itself: a heredoc on its own lines that is not redirected into a file.
+  // What feeds gh itself: a heredoc of its own that is not written into a file.
   const fed = heredocs.filter((h) => h.own && !h.target);
 
   const file = argAt(args, ["--body-file", "-F"]);
@@ -947,14 +1277,47 @@ export function resolveBody(args, cwd, sources = {}) {
   if (inline !== null) {
     if (!expands[inline.index]) return { text: inline.value };
     if (fed.length > 0) return { text: fed.map((h) => h.body).join("\n") };
-    return { skip: "body built by the shell" };
+    return { skip: "body built by the shell", literal: literalText(inline.value) };
   }
 
   return { text: "" }; // no body flag at all -- nothing was searched
 }
 
+/**
+ * The part of an expanded argument that reaches gh as written: the text with each `$( ... )` and
+ * backtick command substitution taken out, since its own text is a command, not body. `$NAME` and
+ * `${...}` stay: they only add text around what is literal. Used by the closing gate alone -- a
+ * literal `does not close #12` stays in the body whatever the expansions add, while the duplicate
+ * and deploy gates would block on a marker the expansion may well supply.
+ */
+function literalText(v) {
+  let out = "";
+  for (let i = 0; i < v.length; i++) {
+    if (v[i] === "`") {
+      const end = v.indexOf("`", i + 1);
+      if (end === -1) break;
+      out += " ";
+      i = end;
+    } else if (v[i] === "$" && v[i + 1] === "(") {
+      let depth = 0;
+      let j = i + 1;
+      for (; j < v.length; j++) {
+        if (v[j] === "(") depth++;
+        else if (v[j] === ")" && --depth === 0) break;
+      }
+      if (j >= v.length) break;
+      out += " ";
+      i = j;
+    } else {
+      out += v[i];
+    }
+  }
+  return out;
+}
+
 /** The contents `--body-file file` will hold when gh reads it. */
 function bodyFile(file, cwd, heredocs, writes) {
+  if (cwd === null) return { skip: "body file in a directory the hook cannot place" };
   const native = nativePath(file);
   const keyOf = (p) => {
     const n = p === file ? native : nativePath(p);
@@ -979,7 +1342,13 @@ function bodyFile(file, cwd, heredocs, writes) {
   };
 
   // Heredocs that write the file before gh reads it, in order: `>` replaces it, `>>` appends.
-  const docs = heredocs.filter((h) => h.target && keyOf(h.target) === key);
+  const docs = [];
+  for (const h of heredocs) {
+    const into = (h.targets ?? (h.target ? [{ path: h.target, append: h.append }] : [])).find(
+      (t) => keyOf(t.path) === key,
+    );
+    if (into) docs.push({ body: h.body, append: into.append });
+  }
   if (docs.length > 0) {
     let text = null; // null: not yet written by this command
     for (const d of docs) {
@@ -1011,16 +1380,18 @@ export function hasDeployImpact(body) {
  *
  * A base that is empty or starts with `-` is unknown too. It comes from the command the model
  * writes, and git would parse `--output=FILE...HEAD` as an option: it writes a file and reports
- * an empty diff.
+ * an empty diff. `head`, the branch the PR is opened from, defaults to HEAD and is held to the
+ * same rule.
  */
-export function changedFiles(cwd, base) {
-  if (typeof base !== "string" || base === "" || base.startsWith("-")) return null;
+export function changedFiles(cwd, base, head = "HEAD") {
+  const usable = (ref) => typeof ref === "string" && ref !== "" && !ref.startsWith("-");
+  if (!usable(base) || !usable(head) || budget.spent()) return null;
   const git = resolveExecutable("git");
   if (!git) return null;
-  const run = spawnSync(git, ["diff", "--name-only", `${base}...HEAD`], {
+  const run = spawnSync(git, [...SAFE_GIT, "diff", "--name-only", `${base}...${head}`, "--"], {
     cwd,
     encoding: "utf8",
-    timeout: 5_000,
+    timeout: budget.timeout(),
   });
 
   if (run.error || run.status !== 0) return null;
@@ -1045,8 +1416,11 @@ export function missingMarkers(body) {
  *
  * There is no escaping syntax in GitHub's markdown. `Refs #N` / `Part of #N` are the safe
  * forms, and examples should use a placeholder such as #NNN.
+ *
+ * GitHub also accepts a colon after the keyword (`Closes: #12`) and a cross-repository target
+ * (`Closes owner/repo#12`), so both count.
  */
-const CLOSING_KEYWORD = /\b(close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/gi;
+const CLOSING_KEYWORD = /\b(close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+(?:[\w.-]+\/[\w.-]+)?#(\d+)/gi;
 
 /** Words that mean the author intends the opposite of what the scanner will do. */
 const NEGATORS =
@@ -1081,9 +1455,10 @@ export function accidentalClosers(body) {
         reason = "inside a blockquote";
       } else if (inCodeSpan(line, m.index)) {
         reason = "inside a `code span`";
-      } else if (NEGATORS.test(before.slice(-40))) {
-        // Only the run-up matters: "This does not close #17" negates, "Closes #17. It does not
-        // fix the migration" does not.
+      } else if (NEGATORS.test(before.slice(-40).split(/[.!?;]["')\]]*\s+|\s(?:--|—|–)\s/).pop())) {
+        // Only the run-up within the keyword's own clause matters: "This does not close #17"
+        // negates; "Closes #17. It does not fix the migration" and "Not a breaking change.
+        // Closes #17" do not.
         reason = "negated -- the scanner does not read negations";
       }
 
@@ -1120,6 +1495,25 @@ export function issueNumber(action, args, stdout, kind = "issue") {
     if (m) return m[1];
   }
   return null;
+}
+
+const URL_REPO = /github\.com\/([^/\s]+)\/([^/\s]+)\/(?:issues|pull)\/\d+/;
+
+/**
+ * The repository a gh create|edit acts on, when the command says: `--repo`/`-R`, else the
+ * `owner/name` of an edit target given by URL (the positional before the first flag, as
+ * issueNumber reads it), else `GH_REPO`. Null when none does: the checkout's own repository.
+ */
+export function ghRepo(args, env = process.env) {
+  const flag = argValue(args, ["--repo", "-R"]);
+  if (flag !== null) return flag;
+  for (const a of args) {
+    if (a.startsWith("-")) break;
+    const m = URL_REPO.exec(a);
+    if (m) return `${m[1]}/${m[2]}`;
+  }
+  const fromEnv = env?.GH_REPO;
+  return typeof fromEnv === "string" && fromEnv.trim() !== "" ? fromEnv.trim() : null;
 }
 
 // ---------------------------------------------------------------- repo config and mode
@@ -1269,6 +1663,26 @@ export function headBranch(gitDir) {
   }
 }
 
+/**
+ * The branch checked out at `checkout`: headBranch, except in a reftable repository, whose HEAD file
+ * always reads `ref: refs/heads/.invalid` while the real HEAD lives in the reftable. Only git can
+ * read that, so git runs then -- and the callers ask only once the checkout is known to be adopted.
+ * Null when detached, unreadable, or there is no git. `git` is called for the executable only then.
+ */
+export function checkoutBranch(checkout, git, time = budget) {
+  const branch = headBranch(checkout.gitDir);
+  if (branch !== ".invalid") return branch;
+  const exe = time.spent() ? null : git();
+  if (!exe) return null;
+  const run = spawnSync(exe, [...SAFE_GIT, "symbolic-ref", "--quiet", "--short", "HEAD"], {
+    cwd: checkout.root,
+    encoding: "utf8",
+    timeout: time.timeout(),
+  });
+  const out = !run.error && run.status === 0 ? run.stdout.trim() : "";
+  return out || null;
+}
+
 /** Where a git directory keeps its refs: a linked worktree's `commondir` names it. */
 function commonDir(gitDir) {
   try {
@@ -1327,11 +1741,34 @@ export function defaultCandidates(gitDir) {
 // repository's own config must not make that git run a program of its choosing.
 const SAFE_GIT = ["-c", "core.fsmonitor=false"];
 
-export function defaultBranches(git, root) {
+/**
+ * A deadline the git probes share: `spent()` once it has passed, and `timeout(max)` the spawn
+ * timeout to use -- `max`, cut to what is left, never 0 (which spawnSync reads as none).
+ *
+ * Claude Code allows the hook 15 s (hooks.json) and, past that, treats it as a non-blocking error
+ * and runs the command: a discard would go ahead unasked. Each probe has its own 5 s cap, and a
+ * compound command with several discard forms on a slow repository could add up past 15 s, so the
+ * hook gives them about 10 s in all from its start. Once spent, the discard gate asks with the
+ * command alone, and the other probes fall back as they do on a timeout.
+ */
+export function makeBudget(ms, now = Date.now) {
+  const end = now() + ms;
+  return {
+    spent: () => now() >= end,
+    timeout: (max = 5_000) => Math.max(1, Math.min(max, end - now())),
+  };
+}
+
+const HOOK_BUDGET_MS = 10_000;
+// Unlimited until main() starts the clock: the tests import these functions.
+let budget = makeBudget(Infinity);
+
+export function defaultBranches(git, root, time = budget) {
+  if (time.spent()) return ["main", "master"];
   const run = spawnSync(git, [...SAFE_GIT, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], {
     cwd: root,
     encoding: "utf8",
-    timeout: 5_000,
+    timeout: time.timeout(),
   });
   const out = !run.error && run.status === 0 ? run.stdout.trim() : "";
   const name = out.includes("/") ? out.slice(out.indexOf("/") + 1) : "";
@@ -1394,10 +1831,10 @@ export function deployBases(cwd, baseFlag) {
   if (baseFlag) return baseFlag.startsWith("-") ? [] : [`origin/${baseFlag}`, baseFlag];
   const git = resolveExecutable("git");
   if (!git) return ["origin/main", "main"];
-  const head = spawnSync(git, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], {
+  const head = spawnSync(git, [...SAFE_GIT, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], {
     cwd,
     encoding: "utf8",
-    timeout: 5_000,
+    timeout: budget.timeout(),
   });
   const remote = !head.error && head.status === 0 ? head.stdout.trim() : "";
   return remote ? [remote] : ["origin/main", "main"];
@@ -1583,11 +2020,24 @@ function taxonomyMessage(kind, n, report) {
 
 // ---------------------------------------------------------------- the gates
 
-/** Files under a deploy glob on this branch, or [] when git cannot say -- unknown never blocks. */
-function deployTouched(cwd, baseFlag, globs) {
-  for (const base of deployBases(cwd, baseFlag)) {
-    const files = changedFiles(cwd, base);
-    if (files !== null) return deployTriggersIn(files, globs);
+/**
+ * The refs to diff as the PR's head, best first: HEAD without --head; with it, the pushed branch
+ * and then the local one. None -- the gate stands aside -- for a head this checkout cannot diff:
+ * empty, option-like, or a fork's `owner:branch`.
+ */
+export function deployHeads(headFlag) {
+  if (headFlag === null || headFlag === undefined) return ["HEAD"];
+  if (headFlag === "" || headFlag.startsWith("-") || headFlag.includes(":")) return [];
+  return [`origin/${headFlag}`, headFlag];
+}
+
+/** Files under a deploy glob on the PR's branch, or [] when git cannot say -- unknown never blocks. */
+function deployTouched(cwd, baseFlag, headFlag, globs) {
+  for (const head of deployHeads(headFlag)) {
+    for (const base of deployBases(cwd, baseFlag)) {
+      const files = changedFiles(cwd, base, head);
+      if (files !== null) return deployTriggersIn(files, globs);
+    }
   }
   return [];
 }
@@ -1596,26 +2046,29 @@ function deployTouched(cwd, baseFlag, globs) {
  * The gh gates: exit 2 on a block, else return the config warning (or null) for the caller to
  * pass on -- alone, or beside an ask from the git gates.
  */
-function preToolUse({ kind, action, args, cwd, context, adopted, gates, sources }) {
+function preToolUse({ kind, action, args, cwd, dir, context, adopted, gates, sources }) {
   const warning = context.error
     ? `github-workflow: ${slash(context.path)} is not valid (${context.error}) -- repo gates skipped; run /github-workflow:doctor`
     : null;
 
-  const body = resolveBody(args, cwd, sources);
-  if (body.skip) return warning;
+  // A body file is read where gh runs: after a `cd` in the same command, that directory.
+  const body = resolveBody(args, dir === undefined ? cwd : dir, sources);
 
   // Closing keywords act from PR descriptions (and default-branch commits), never from an
   // issue body, so issues are not checked here. Edits count: an edited body re-triggers it.
-  if (kind === "pr" && closingGateEnabled(process.env, gates)) {
-    const found = accidentalClosers(body.text);
+  // A body the shell builds is judged on its literal text, which the expansions cannot remove.
+  const closing = body.skip ? body.literal : body.text;
+  if (kind === "pr" && typeof closing === "string" && closingGateEnabled(process.env, gates)) {
+    const found = accidentalClosers(closing);
     if (found.length > 0) block(closingMessage(found));
   }
+  if (body.skip) return warning;
 
   if (kind === "pr" && action === "create" && adopted) {
     const deploy = gates.deployImpact;
     const globs = Array.isArray(deploy?.paths) ? deploy.paths : [];
     if (globs.length > 0 && !hasDeployImpact(body.text)) {
-      const touched = deployTouched(cwd, argValue(args, ["--base", "-B"]), globs);
+      const touched = deployTouched(cwd, argValue(args, ["--base", "-B"]), argValue(args, ["--head", "-H"]), globs);
       if (touched.length > 0) block(deployMessage(touched, deploy.doc));
     }
   }
@@ -1644,7 +2097,7 @@ function payloadCwd(payload) {
  * runs only then, to confirm the default branch and, if it matches, to ask whether git ignores the
  * file (workflow tools keep ignored scratch in the main checkout). Anything unknown passes.
  */
-export function editAsk(payload, env = process.env) {
+export function editAsk(payload, env = process.env, time = budget) {
   const input = payload?.tool_input;
   const raw = payload?.tool_name === "NotebookEdit" ? input?.notebook_path : input?.file_path;
   if (typeof raw !== "string" || raw === "") return null;
@@ -1658,14 +2111,20 @@ export function editAsk(payload, env = process.env) {
   if (!checkout) return null;
   if (within(checkout.gitDir, file) || within(join(checkout.root, ".git"), file)) return null;
   if (!branchGateOn(checkout.root)) return null;
-  const branch = headBranch(checkout.gitDir);
+  const branch = checkoutBranch(checkout, () => resolveExecutable("git", env), time);
   if (!branch || !defaultCandidates(checkout.gitDir).includes(branch)) return null;
 
   const git = resolveExecutable("git", env);
-  if (!git || !defaultBranches(git, checkout.root).includes(branch)) return null;
+  if (!git || !defaultBranches(git, checkout.root, time).includes(branch)) return null;
   const path = slash(relative(checkout.root, file));
-  const ignored = spawnSync(git, [...SAFE_GIT, "check-ignore", "-q", "--", path], { cwd: checkout.root, timeout: 5_000 });
-  if (!ignored.error && ignored.status === 0) return null;
+  // Out of time, the file is taken as not ignored: the human is asked rather than not.
+  if (!time.spent()) {
+    const ignored = spawnSync(git, [...SAFE_GIT, "check-ignore", "-q", "--", path], {
+      cwd: checkout.root,
+      timeout: time.timeout(),
+    });
+    if (!ignored.error && ignored.status === 0) return null;
+  }
 
   return editReason(whoOf(payload), path, branch);
 }
@@ -1675,8 +2134,9 @@ const COMMITS = new Set(["commit", "merge", "cherry-pick", "revert", "am"]);
 /**
  * The ask gates on a Bash command: the reason for the first git command that should ask, or null.
  * Every git command in it is judged, in order, each in the directory the shell will run it in.
+ * `time` is the deadline its git probes share (makeBudget).
  */
-export function gitAsk(command, cwd, payload = {}, env = process.env) {
+export function gitAsk(command, cwd, payload = {}, env = process.env, time = budget) {
   const cmds = gitCommands(command, cwd);
   if (cmds.length === 0) return null;
 
@@ -1687,7 +2147,7 @@ export function gitAsk(command, cwd, payload = {}, env = process.env) {
   const defaults = new Map();
   const defaultsOf = (root) => {
     if (!git()) return [];
-    if (!defaults.has(root)) defaults.set(root, defaultBranches(git(), root));
+    if (!defaults.has(root)) defaults.set(root, defaultBranches(git(), root, time));
     return defaults.get(root);
   };
 
@@ -1703,7 +2163,7 @@ export function gitAsk(command, cwd, payload = {}, env = process.env) {
     else movedSomewhere = true;
   };
   const branchOf = (checkout) =>
-    movedSomewhere ? null : moved.has(checkout.root) ? moved.get(checkout.root) : headBranch(checkout.gitDir);
+    movedSomewhere ? null : moved.has(checkout.root) ? moved.get(checkout.root) : checkoutBranch(checkout, git, time);
 
   for (const g of cmds) {
     if (g.moves) {
@@ -1712,7 +2172,7 @@ export function gitAsk(command, cwd, payload = {}, env = process.env) {
     }
     const form = discardForm(g);
     const reason =
-      (form && discardAsk(git, g, form, who, cwd, env)) || branchAsk(g, branchOf, who, defaultsOf);
+      (form && discardAsk(git, g, form, who, cwd, env, time)) || branchAsk(g, branchOf, who, defaultsOf);
     if (reason) return reason;
     const target = switchTarget(g, form);
     if (target !== undefined) moveTo(g.dir, target);
@@ -1789,12 +2249,12 @@ function branchAsk(g, branchOf, who, defaultsOf) {
  * The discard gate on one git command already known to be a discarding form. `git` resolves the
  * executable; without one the gate passes, and the self-check reports it.
  */
-function discardAsk(git, g, form, who, cwd, env) {
+function discardAsk(git, g, form, who, cwd, env, time = budget) {
   const context = loadRepoContext(g.dir ?? cwd);
   if (!discardGateEnabled(env, context.config?.gates) || !git()) return null;
   if (g.dir === null) return discardReason(who, form.label, null, null);
   if (form.unknown) return discardReason(who, form.label, placeOf(g.dir), null);
-  const loss = lossOf(git(), g.dir, form);
+  const loss = lossOf(git(), g.dir, form, time);
   if (loss === null || (loss.lost && loss.lost.length === 0)) return null;
   return discardReason(who, form.label, loss.where, loss.lost);
 }
@@ -1804,17 +2264,19 @@ const placeOf = (dir) => slash(checkoutAt(dir)?.root ?? dir);
 
 /**
  * What `form` would destroy, asked of git in `dir`: `{ where, lost }`, `lost` null when git ran
- * out of time (the command alone is then shown); or null when git cannot answer at all -- not a
- * repository, a worktree that does not exist -- which passes.
+ * out of time, or the hook's shared deadline had passed before asking (the command alone is then
+ * shown); or null when git cannot answer at all -- not a repository, a worktree that does not
+ * exist -- which passes.
  *
  * User-derived paths go after `--`, always: they come from the command the model wrote, and git
  * must never read one as an option.
  */
-function lossOf(git, dir, form) {
+function lossOf(git, dir, form, time = budget) {
+  if (time.spent()) return { where: placeOf(dir), lost: null };
   // The directory comes from the command, before anyone approved it: never let a repository's own
   // config run a program (core.fsmonitor) on the hook's behalf.
   const run = (at, args) =>
-    spawnSync(git, [...SAFE_GIT, "--no-optional-locks", ...args], { cwd: at, encoding: "utf8", timeout: 5_000 });
+    spawnSync(git, [...SAFE_GIT, "--no-optional-locks", ...args], { cwd: at, encoding: "utf8", timeout: time.timeout() });
   const timedOut = (r) => r.error?.code === "ETIMEDOUT";
 
   if (form.stash) {
@@ -1866,24 +2328,23 @@ function lossOf(git, dir, form) {
   return { where, lost };
 }
 
-function postToolUse({ kind, action, args, cwd, adopted, gates, payload }) {
-  if (!adopted || gates.labelTaxonomy === false) process.exit(0);
+function postToolUse({ kind, action, args, cwd, adopted, gates, payload, repo }) {
+  if (!adopted || gates.labelTaxonomy === false) return;
 
   const n = issueNumber(action, args, stdoutOf(payload), kind);
   const bash = resolveExecutable("bash");
-  if (!n || !bash || !existsSync(LINTER)) process.exit(0);
+  if (!n || !bash || !existsSync(LINTER)) return;
 
-  const repo = argValue(args, ["--repo", "-R"]);
   const argv = [slash(LINTER), n, ...(kind === "pr" ? ["--pr"] : []), ...(repo ? ["--repo", repo] : [])];
-  const run = spawnSync(bash, argv, { cwd, encoding: "utf8", timeout: 40_000 });
+  const run = spawnSync(bash, argv, { cwd, encoding: "utf8", timeout: 40_000, env: absolutePathEnv() });
 
-  if (run.error || run.status === null || run.status === 0) process.exit(0);
+  if (run.error || run.status === null || run.status === 0) return;
 
   // Non-zero alone does not mean "violation". The linter also exits 1 for a missing jq, an
   // unauthenticated gh, a deleted issue, a network failure -- none of them the model's to fix.
   // A real violation always prints a FAIL line on stdout, so that is the discriminator.
   const report = run.stdout ?? "";
-  if (!/^\s*FAIL\s/m.test(report)) process.exit(0);
+  if (!/^\s*FAIL\s/m.test(report)) return;
 
   block(taxonomyMessage(kind, n, report));
 }
@@ -1996,6 +2457,7 @@ export function selfCheck(cwd = process.cwd(), env = process.env, linter = LINTE
 // ---------------------------------------------------------------- main
 
 async function main() {
+  budget = makeBudget(HOOK_BUDGET_MS);
   const argv = process.argv.slice(2);
   if (argv.includes("--self-check")) {
     const rows = selfCheck(argValue(argv, ["--cwd"]) ?? process.cwd());
@@ -2034,24 +2496,26 @@ async function main() {
   // Decided first, acted on last: a block from the gh gates below wins over an ask.
   const reason = event === "PreToolUse" && command.includes("git") ? quietly(() => gitAsk(command, cwd, payload)) : null;
 
-  const found = command.includes("gh") ? findGhTarget(command) : null;
-  if (!found) {
-    if (reason) ask(reason);
-    process.exit(0);
-  }
+  // Every gh create|edit in the command is judged, in order; the first block wins.
+  const targets = command.includes("gh") ? findGhTargets(command, cwd) : [];
+  let warning = null;
+  for (const found of targets) {
+    // gh acts on the checkout it runs in: after a `cd`, that one. Unknown: guest, which fails open.
+    const where = found.dir === undefined ? cwd : found.dir;
+    const context = where === null ? {} : loadRepoContext(where);
+    const repo = ghRepo(found.args, found.envRepo ? { ...process.env, GH_REPO: found.envRepo } : process.env);
+    const adopted = isAdopted(context, repo);
+    const gates = adopted ? (context.config.gates ?? {}) : {};
+    const state = { ...found, cwd: where ?? cwd, dir: where, context, adopted, gates, payload, repo };
 
-  const context = loadRepoContext(cwd);
-  const adopted = isAdopted(context, argValue(found.args, ["--repo", "-R"]));
-  const gates = adopted ? (context.config.gates ?? {}) : {};
-  const state = { ...found, cwd, context, adopted, gates, payload };
-
-  if (event === "PreToolUse") {
-    const warning = preToolUse({ ...state, sources: bodySources(command, found) });
-    if (reason) ask(reason, warning);
-    pass(warning);
+    if (event === "PreToolUse") {
+      const w = preToolUse({ ...state, sources: bodySources(command, found) });
+      warning ??= w;
+    }
+    if (event === "PostToolUse") postToolUse(state);
   }
-  if (event === "PostToolUse") postToolUse(state);
-  process.exit(0);
+  if (event === "PreToolUse" && reason) ask(reason, warning);
+  pass(event === "PreToolUse" ? warning : null);
 }
 
 const EDIT_TOOLS = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
@@ -2080,4 +2544,12 @@ function invokedAsScript() {
   }
 }
 
-if (invokedAsScript()) await main();
+// Anything main() does not understand -- a command nested deep enough to exhaust the stack -- never
+// stops work: exit 0. block() and the others exit themselves and never reach the catch.
+if (invokedAsScript()) {
+  try {
+    await main();
+  } catch {
+    process.exit(0);
+  }
+}

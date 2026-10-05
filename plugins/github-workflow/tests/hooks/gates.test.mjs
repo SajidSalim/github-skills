@@ -325,6 +325,22 @@ describe("PreToolUse — bodies the shell builds", () => {
     assert.equal(r.status, 0);
   });
 
+  // Expansions only add text: a literal negated keyword stays in the body whatever $USER holds.
+  test("guest: a negated keyword beside a $VAR in an inline body is still blocked", () => {
+    const r = runHook(pre(`gh pr create --title t --body "This does not close #12 for $USER."`, temp("guest")));
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /negated/);
+  });
+
+  test("guest: the same body saying Refs passes", () => {
+    assert.equal(runHook(pre(`gh pr create --title t --body "Refs #12 for $USER."`, temp("guest"))).status, 0);
+  });
+
+  test("guest: a keyword only inside a command substitution's own text is not judged", () => {
+    const cmd = `gh pr create --title t --body "Summary: $(printf 'does not close #%s' 12)"`;
+    assert.equal(runHook(pre(cmd, temp("guest"))).status, 0);
+  });
+
   test("adopted: an issue body written by a heredoc in the same command is judged", () => {
     const dir = repoDir(ADOPTED);
     const ok = `cat > issue.md <<'EOF'\n${RECORD}\nEOF\ngh issue create --title t --body-file issue.md`;
@@ -406,6 +422,19 @@ describe("PostToolUse — taxonomy", () => {
       hook: stubbed('echo "gh is not authenticated" >&2\nexit 1\n'),
     });
     assert.equal(r.status, 0);
+  });
+
+  // The linter runs gh and jq by bare name in the user's repository: no relative PATH entry.
+  test("the linter's PATH holds no empty or relative entry", { skip: !bashAvailable }, () => {
+    const sep = process.platform === "win32" ? ";" : ":";
+    const key = Object.keys(process.env).find((k) => /^path$/i.test(k)) ?? "PATH";
+    runHook(post(`gh issue edit 42 --add-label area:ci`, "", dir), {
+      hook: stubbed('printf "%s" "$PATH" > path.txt\nexit 0\n'),
+      env: { [key]: `${process.env[key]}${sep}planted-relative-dir${sep}` },
+    });
+    const path = readFileSync(join(dir, "path.txt"), "utf8");
+    assert.notEqual(path, "");
+    assert.doesNotMatch(path, /planted-relative-dir/);
   });
 
   test("forwards --repo through to the linter", { skip: !bashAvailable }, () => {
@@ -524,6 +553,10 @@ describe("payload robustness", () => {
   });
   test("a missing command exits 0", () => {
     assert.equal(runHook({ tool_name: "Bash", tool_input: {} }).status, 0);
+  });
+  test("a command nested past any real depth exits 0, never an error", () => {
+    const cmd = `echo ${'"$('.repeat(20000)}gh pr create --body x${')"'.repeat(20000)}`;
+    assert.equal(runHook(pre(cmd, temp("guest"))).status, 0);
   });
   test("an unknown hook event exits 0", () => {
     const r = runHook({
@@ -662,6 +695,169 @@ Deploy impact: none`;
   });
 });
 
+// `gh pr create --head B` opens a PR from B whatever is checked out: the diff is B's.
+describe("PreToolUse — deploy gate, --head", { skip: !gitAvailable }, () => {
+  let repo;
+  const git = (...args) => spawnSync("git", args, { cwd: repo, encoding: "utf8" });
+  const branch = (name, file) => {
+    git("checkout", "-q", "-b", name, "main");
+    mkdirSync(join(repo, dirname(file)), { recursive: true });
+    writeFileSync(join(repo, file), "x\n");
+    git("add", "-A");
+    git("commit", "-q", "-m", name, "--no-verify");
+  };
+
+  before(() => {
+    repo = temp("deploy-head");
+    git("init", "-q", "-b", "main");
+    git("config", "user.email", "t@example.com");
+    git("config", "user.name", "t");
+    git("config", "commit.gpgsign", "false");
+    mkdirSync(join(repo, ".github"));
+    writeFileSync(
+      join(repo, ".github", "github-workflow.json"),
+      JSON.stringify({ ...ADOPTED, gates: { deployImpact: { paths: ["migrations/**"] } } }),
+    );
+    writeFileSync(join(repo, "README.md"), "seed\n");
+    git("add", "-A");
+    git("commit", "-q", "-m", "seed", "--no-verify");
+    branch("mig", "migrations/1.sql");
+    branch("plain", "src/a.txt");
+  });
+
+  const create = (head) => `gh pr create --title t --body x --base main --head ${head}`;
+
+  test("a PR from a plain branch passes while a migration branch is checked out", () => {
+    git("checkout", "-q", "mig");
+    assert.equal(runHook(pre(create("plain"), repo)).status, 0);
+  });
+
+  test("a PR from the migration branch is blocked while a plain branch is checked out", () => {
+    git("checkout", "-q", "plain");
+    const r = runHook(pre(create("mig"), repo));
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /migrations\/1\.sql/);
+  });
+
+  test("-H is the short form", () => {
+    git("checkout", "-q", "plain");
+    assert.equal(runHook(pre(`gh pr create --title t --body x --base main -H mig`, repo)).status, 2);
+  });
+
+  test("a fork's owner:branch head cannot be diffed here, so the gate stands aside", () => {
+    git("checkout", "-q", "mig");
+    assert.equal(runHook(pre(create("someone:plain"), repo)).status, 0);
+  });
+
+  test("an option-like --head never reaches git", () => {
+    git("checkout", "-q", "mig");
+    assert.equal(runHook(pre(create(`"--output=y"`), repo)).status, 0);
+    assert.equal(existsSync(join(repo, "y")), false);
+  });
+});
+
+// Ordinary command shapes that once reached no gh gate at all. A false block on everyday gh use is
+// worse than a miss, so each shape has its passing twin.
+describe("PreToolUse — command shapes", () => {
+  const NEG = `--title t --body "This does not close #12."`;
+  const OK = `--title t --body "Refs #12."`;
+
+  test("a PR URL captured with $(...) is still judged", () => {
+    assert.equal(runHook(pre(`URL=$(gh pr create ${NEG})`, temp("guest"))).status, 2);
+    assert.equal(runHook(pre(`URL=$(gh pr create ${OK}) && echo "$URL"`, temp("guest"))).status, 0);
+  });
+
+  test("so is one inside a double-quoted $(...), backticks or a subshell", () => {
+    for (const shape of [
+      `echo "$(gh pr create ${NEG})"`,
+      `URL=\`gh pr create ${NEG}\``,
+      `(gh pr create ${NEG})`,
+      `(cd . && gh pr create ${NEG})`,
+    ]) {
+      assert.equal(runHook(pre(shape, temp("guest"))).status, 2, shape);
+    }
+    for (const shape of [`echo "$(gh pr create ${OK})"`, `(gh pr create ${OK})`, `echo "$(gh pr view 1)"`]) {
+      assert.equal(runHook(pre(shape, temp("guest"))).status, 0, shape);
+    }
+  });
+
+  test("a single-quoted mention of $(gh pr create ...) runs nothing and is not judged", () => {
+    const cmd = `git commit -m 'docs: never write $(gh pr create --body "does not close #1")'`;
+    assert.equal(runHook(pre(cmd, temp("guest"))).status, 0);
+  });
+
+  test("-R before the action is still that command, and names the repository", () => {
+    assert.equal(runHook(pre(`gh pr -R acme/other create ${NEG}`, temp("guest"))).status, 2);
+    assert.equal(runHook(pre(`gh issue --repo acme/other create --title x --body plain`, repoDir(ADOPTED))).status, 0);
+    assert.equal(runHook(pre(`gh issue -R acme/shop create --title x --body plain`, repoDir(ADOPTED))).status, 2);
+  });
+
+  test("an attached short flag carries its value", () => {
+    assert.equal(runHook(pre(`gh pr create -t t -b'This does not close #12.'`, temp("guest"))).status, 2);
+    assert.equal(runHook(pre(`gh pr create -t t -b'Refs #12.'`, temp("guest"))).status, 0);
+  });
+
+  test("a --body-file after cd is read from that directory", () => {
+    const dir = temp("guest");
+    mkdirSync(join(dir, "sub"));
+    writeFileSync(join(dir, "pr.md"), "Refs #12\n");
+    writeFileSync(join(dir, "sub", "pr.md"), "This does not close #12.\n");
+    assert.equal(runHook(pre(`cd sub && gh pr create --title t --body-file pr.md`, dir)).status, 2);
+    assert.equal(runHook(pre(`(cd sub) && gh pr create --title t --body-file pr.md`, dir)).status, 0);
+  });
+
+  // The `)` closing a subshell opened before gh's own word sticks to gh's last argument.
+  test("(cd DIR && gh ... LAST): the subshell's ) is not part of the last argument", () => {
+    const dir = repoDir(ADOPTED);
+    mkdirSync(join(dir, "sub"));
+    writeFileSync(join(dir, "sub", "pr.md"), "This does not close #12.\n");
+    assert.equal(runHook(pre(`(cd sub && gh pr create --title t --body-file pr.md)`, dir)).status, 2);
+    assert.equal(runHook(pre(`(cd . && gh issue create --title t --body x --repo acme/shop)`, dir)).status, 2);
+    assert.equal(runHook(pre(`(cd . && gh issue create --title t --body x --repo acme/other)`, dir)).status, 0);
+  });
+
+  // Every gh create|edit in the command is judged; any block wins.
+  test("a later gh pr create after a $(gh issue create ...) is still judged", () => {
+    const cmd = `N=$(gh issue create --title t --body x) && gh pr create --title t --body "This does not close #12."`;
+    assert.equal(runHook(pre(cmd, temp("guest"))).status, 2);
+    const ok = `N=$(gh issue create --title t --body x) && gh pr create --title t --body "Refs #12."`;
+    assert.equal(runHook(pre(ok, temp("guest"))).status, 0);
+  });
+
+  test("the first of two gh commands still blocks when the second is clean", () => {
+    const cmd = `gh pr create --title t --body "This does not close #12." && gh pr edit 3 --add-label x`;
+    assert.equal(runHook(pre(cmd, temp("guest"))).status, 2);
+  });
+
+  test("adopted: an issue create after a clean pr create is still asked for its record", () => {
+    const cmd = `gh pr create --title t --body "Refs #1" && gh issue create --title t --body plain`;
+    assert.equal(runHook(pre(cmd, repoDir(ADOPTED))).status, 2);
+  });
+
+  // The repository gh acts in is the one it runs in: after a cd, that checkout's mode and config.
+  test("after cd into another checkout, that checkout decides the mode", () => {
+    const adopted = repoDir(ADOPTED);
+    const guest = repoDir();
+    const create = `gh issue create --title t --body plain`;
+    assert.equal(runHook(pre(`cd "${guest.replace(/\\/g, "/")}" && ${create}`, adopted)).status, 0);
+    assert.equal(runHook(pre(`cd "${adopted.replace(/\\/g, "/")}" && ${create}`, guest)).status, 2);
+    assert.equal(runHook(pre(`cd "$ELSEWHERE" && ${create}`, adopted)).status, 0, "unknown: guest");
+  });
+
+  // An agent writes the variable as a prefix far more often than it exports it.
+  test("a GH_REPO=x prefix on the gh command names the repository", () => {
+    const dir = repoDir(ADOPTED);
+    assert.equal(runHook(pre(`GH_REPO=acme/other gh issue create --title t --body plain`, dir)).status, 0);
+    assert.equal(runHook(pre(`env GH_REPO=acme/shop gh issue create --title t --body plain`, dir)).status, 2);
+  });
+
+  test("a --body-file after a cd the hook cannot follow is skipped, never read from the wrong place", () => {
+    const dir = temp("guest");
+    writeFileSync(join(dir, "pr.md"), "This does not close #12.\n");
+    assert.equal(runHook(pre(`cd "$WORK" && gh pr create --title t --body-file pr.md`, dir)).status, 0);
+  });
+});
+
 describe("modes", () => {
   test("guest mode still blocks a negated closing keyword on a PR", () => {
     const r = runHook(pre(NEGATED_PR, temp("guest")));
@@ -716,6 +912,34 @@ describe("--repo", () => {
   test("another repo is guest mode", () => {
     const cmd = `gh issue create --repo acme/other --title x --body plain`;
     assert.equal(runHook(pre(cmd, repoDir(ADOPTED))).status, 0);
+  });
+
+  // An edit target given by URL names its repository as surely as --repo does.
+  test("an edit by URL of another repo is guest mode: no lint of this repo's same number", { skip: !bashAvailable }, () => {
+    const dir = repoDir(ADOPTED);
+    const r = runHook(post(`gh issue edit https://github.com/someone/else/issues/42 --add-label bug`, "", dir), {
+      hook: pluginTree('printf "%s" "$*" > args.txt\necho "  FAIL  #42   no type: label"\nexit 1\n'),
+    });
+    assert.equal(r.status, 0);
+    assert.equal(existsSync(join(dir, "args.txt")), false, "the linter must not run");
+  });
+
+  test("an edit by URL of the configured repo lints that repo", { skip: !bashAvailable }, () => {
+    const dir = repoDir(ADOPTED);
+    runHook(post(`gh pr edit https://github.com/acme/shop/pull/42 --add-label type:chore`, "", dir), {
+      hook: pluginTree('printf "%s" "$*" > args.txt\nexit 0\n'),
+    });
+    assert.match(readFileSync(join(dir, "args.txt"), "utf8"), /--repo acme\/shop/);
+  });
+
+  test("GH_REPO naming another repo is guest mode", () => {
+    const r = runHook(pre(`gh issue create --title x --body plain`, repoDir(ADOPTED)), { env: { GH_REPO: "acme/other" } });
+    assert.equal(r.status, 0);
+  });
+
+  test("--repo wins over GH_REPO", () => {
+    const cmd = `gh issue create --repo acme/shop --title x --body plain`;
+    assert.equal(runHook(pre(cmd, repoDir(ADOPTED)), { env: { GH_REPO: "acme/other" } }).status, 2);
   });
 
   test("a config that names no repo cannot vouch for --repo", () => {
@@ -940,6 +1164,18 @@ describe("PreToolUse — discard gate", { skip: !gitAvailable }, () => {
     assert.match(why, /^github-workflow: Claude wants to run git checkout, which discards uncommitted changes in /);
     assert.match(why, /: lib\/a\.txt\. They may not be its own\. Approve only if you want them gone\.$/);
     assert.doesNotMatch(why, NO_OFF_SWITCH);
+  });
+
+  // The hook's own clock starts its git deadline: a preload makes every Date.now() 20 s later than
+  // the last, so the budget main starts is spent before the first probe, and the ask carries the
+  // command alone.
+  test("once the hook's deadline has passed, the ask carries the command alone", () => {
+    const dir = gitRepo();
+    write(dir, "lib/a.txt");
+    const clock = "data:text/javascript,globalThis.n=0;globalThis.r=Date.now;Date.now=()=>r()+(n++)*2e4;";
+    const why = askOf(runHook(pre("git checkout -- lib", dir), { env: { NODE_OPTIONS: `--import=${clock}` } }));
+    assert.match(why, /and the hook could not tell which/);
+    assert.doesNotMatch(why, /lib\/a\.txt/);
   });
 
   test("git checkout -- lib passes when lib/ is clean", () => {
@@ -1261,6 +1497,45 @@ describe("PreToolUse — branch gate, edits", { skip: !gitAvailable }, () => {
   test("PostToolUse never asks", () => {
     const dir = gitRepo();
     passes(runHook({ ...edit(join(dir, "lib", "a.txt"), dir), hook_event_name: "PostToolUse" }));
+  });
+});
+
+// A reftable repository's .git/HEAD always reads `ref: refs/heads/.invalid`; the branch is in the
+// reftable, so only git can say. reftable is planned as git 3.0's default.
+const reftableAvailable =
+  gitAvailable && gitIn(temp("reftable-probe"), "init", "-q", "--ref-format=reftable").status === 0;
+
+describe("PreToolUse — branch gate, reftable", { skip: !reftableAvailable }, () => {
+  const reftableRepo = () => {
+    const dir = temp("reftable");
+    gitIn(dir, "init", "-q", "--ref-format=reftable", "-b", "main");
+    for (const [k, v] of [["user.email", "t@example.com"], ["user.name", "t"], ["commit.gpgsign", "false"]]) {
+      gitIn(dir, "config", k, v);
+    }
+    write(dir, ".github/github-workflow.json", JSON.stringify(ADOPTED));
+    write(dir, "lib/a.txt", "a\n");
+    gitIn(dir, "add", "-A");
+    gitIn(dir, "commit", "-q", "-m", "seed", "--no-verify");
+    return dir;
+  };
+
+  test("git commit on main asks", () => {
+    assert.match(askOf(runHook(pre("git commit -m x", reftableRepo()))), /run git commit on main/);
+  });
+
+  test("an edit on main asks", () => {
+    const dir = reftableRepo();
+    const r = runHook({
+      hook_event_name: "PreToolUse", tool_name: "Edit", cwd: dir,
+      tool_input: { file_path: join(dir, "lib", "a.txt"), old_string: "a", new_string: "b" },
+    });
+    assert.match(askOf(r), /edit lib\/a\.txt on main/);
+  });
+
+  test("a feature branch passes", () => {
+    const dir = reftableRepo();
+    gitIn(dir, "checkout", "-q", "-b", "feature");
+    passes(runHook(pre("git commit -m x", dir)));
   });
 });
 
