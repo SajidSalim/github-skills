@@ -554,6 +554,10 @@ describe("payload robustness", () => {
   test("a missing command exits 0", () => {
     assert.equal(runHook({ tool_name: "Bash", tool_input: {} }).status, 0);
   });
+  test("a command nested past any real depth exits 0, never an error", () => {
+    const cmd = `echo ${'"$('.repeat(20000)}gh pr create --body x${')"'.repeat(20000)}`;
+    assert.equal(runHook(pre(cmd, temp("guest"))).status, 0);
+  });
   test("an unknown hook event exits 0", () => {
     const r = runHook({
       hook_event_name: "Other",

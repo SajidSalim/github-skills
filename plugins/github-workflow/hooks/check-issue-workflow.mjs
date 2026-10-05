@@ -2544,4 +2544,12 @@ function invokedAsScript() {
   }
 }
 
-if (invokedAsScript()) await main();
+// Anything main() does not understand -- a command nested deep enough to exhaust the stack -- never
+// stops work: exit 0. block() and the others exit themselves and never reach the catch.
+if (invokedAsScript()) {
+  try {
+    await main();
+  } catch {
+    process.exit(0);
+  }
+}

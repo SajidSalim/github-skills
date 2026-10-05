@@ -14,8 +14,9 @@ saved_ifs=$IFS
 IFS=:
 set -f
 for dir in $PATH; do
+  # bash's PATH is POSIX-form, Git Bash's included (/c/Program Files/nodejs).
   case $dir in
-    /* | [A-Za-z]:[\\/]*) ;;
+    /*) ;;
     *) continue ;;
   esac
   for name in node node.exe; do

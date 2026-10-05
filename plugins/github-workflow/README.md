@@ -147,7 +147,7 @@ The hook judges the body `gh` will send. A heredoc counts: `--body "$(cat <<'EOF
 `cat > FILE <<'EOF'`. These bodies it cannot read, so they go through unchecked: one piped on stdin
 without a heredoc, `--web`, a `--body` the shell builds without a heredoc (`"$(cat FILE)"`,
 `"$BODY"`; the closing-keyword gate still judges its literal text), and a `--body-file` the same
-command writes some other way (`echo … > FILE`, `tee`).
+command writes some other way (`echo … > FILE`, a `tee` not fed by a heredoc).
 On Windows, Git Bash paths such as `/tmp/pr.md` are translated before the file is read.
 
 The block and ask messages deliberately do not say how to switch a gate off. The switches are
