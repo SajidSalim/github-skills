@@ -127,7 +127,7 @@ A repo whose config says `"inFlightState": "board"` never carries those two — 
 | `resolution:cannot-reproduce` | Tried and failed to reproduce. List what you tried. |
 | `resolution:works-as-intended` | Behaviour is correct; the expectation was wrong. Explain the intent. |
 
-A normal fix needs no resolution label — the merged PR and the resolution comment say everything.
+A normal fix needs no resolution label — the merged PR says everything.
 
 **Every other close must carry one, and this is load-bearing.** The duplicate check
 ([duplicate-check.md](duplicate-check.md)) has to tell an *adjudicated decision* from an *old fix*
@@ -136,7 +136,7 @@ human opening the issue and reading the thread. A close missing one turns every 
 into an interruption for the operator.
 
 ```bash
-bash <skill-dir>/scripts/lint-issue-labels.sh --all --state all    # flags closes with no resolution:
+bash "<skill-dir>/scripts/lint-issue-labels.sh" --all --state all --limit 5000    # flags closes with no resolution:
 ```
 
 ---
@@ -177,11 +177,11 @@ Invoke it through `bash`, not `./…` — git does not record the executable bit
 with `core.filemode=false` (any Windows checkout), so `./` fails with "Permission denied" elsewhere.
 
 ```bash
-bash <skill-dir>/scripts/bootstrap-labels.sh --dry-run                     # print, change nothing
-bash <skill-dir>/scripts/bootstrap-labels.sh                               # areas + mode from the repo's config
-bash <skill-dir>/scripts/bootstrap-labels.sh --areas api,ui,checkout       # an explicit area set
-bash <skill-dir>/scripts/bootstrap-labels.sh --board                       # a Projects board owns in-flight state
-bash <skill-dir>/scripts/bootstrap-labels.sh --repo owner/name             # a specific repo
+bash "<skill-dir>/scripts/bootstrap-labels.sh" --dry-run                   # print, change nothing
+bash "<skill-dir>/scripts/bootstrap-labels.sh"                             # areas + mode from the repo's config
+bash "<skill-dir>/scripts/bootstrap-labels.sh" --areas api,ui,checkout     # an explicit area set
+bash "<skill-dir>/scripts/bootstrap-labels.sh" --board                     # a Projects board owns in-flight state
+bash "<skill-dir>/scripts/bootstrap-labels.sh" --repo owner/name           # a specific repo
 ```
 
 `/github-workflow:setup` runs it for you with the right flags.

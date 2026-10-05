@@ -202,3 +202,39 @@ test_no_arguments_prints_usage() {
   assert_eq 2 "$RUN_STATUS"
   assert_contains "$RUN_OUT" "usage:"
 }
+
+# ---------------------------------------------------------------- --all and --limit
+
+# Stub `gh issue list` to return $1 clean issues, whatever --limit asked for.
+_stub_list() {
+  local n="$1" json
+  json=$(jq -n -c --argjson n "$n" \
+    '[range(1; $n + 1) | {number: ., title: "t", state: "OPEN", stateReason: "",
+       labels: [{name: "type:chore"}, {name: "priority:p2"}, {name: "area:ci"}]}]')
+  stub_gh <<STUB
+case "\$1 \$2" in
+  "auth status") exit 0 ;;
+  "repo view")   echo "owner/repo"; exit 0 ;;
+  "issue list")  echo '$json'; exit 0 ;;
+esac
+echo "unexpected gh call: \$*" >&2
+exit 1
+STUB
+}
+
+# A full page means the sweep may have stopped short. A clean summary must not read as a
+# complete audit of the backlog.
+test_all_says_when_it_stopped_at_the_limit() {
+  _stub_list 3
+  _lint --all --limit 3
+  assert_eq 0 "$RUN_STATUS"
+  assert_contains "$RUN_OUT" "3 issue(s) checked"
+  assert_contains "$RUN_OUT" "stopped at --limit 3, there may be more"
+}
+
+test_all_under_the_limit_claims_nothing_extra() {
+  _stub_list 2
+  _lint --all --limit 3
+  assert_eq 0 "$RUN_STATUS"
+  assert_not_contains "$RUN_OUT" "stopped at --limit"
+}

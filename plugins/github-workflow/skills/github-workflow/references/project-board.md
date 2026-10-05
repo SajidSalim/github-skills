@@ -336,10 +336,14 @@ much of this an agent has to do. Prefer configuring those over scripting the sam
 
 ## Changing a single-select field
 
+**Only on the operator's explicit instruction.** This rewrites a field on a shared board, and no
+hook asks first: the plugin's discard gate covers git commands, not GraphQL mutations.
+
 `updateProjectV2Field` needs **`project`** write scope — `read:project` is not enough and the failure
-is an explicit `INSUFFICIENT_SCOPES`, not a silent no-op. `gh auth refresh -s project` grants it, and
-note it **replaces** `read:project` in the scope list rather than adding to it; `project` is a superset,
-so nothing is lost.
+is an explicit `INSUFFICIENT_SCOPES`, not a silent no-op.
+`gh auth refresh -s project` grants it, and only the operator runs it; note it **replaces**
+`read:project` in the scope list rather than adding to it; `project` is a superset, so nothing is
+lost.
 
 **The mutation replaces the whole option set; it does not append.** List every option you want to keep
 or you will delete the ones you omit — along with that value on every card carrying it.
@@ -357,7 +361,7 @@ All `(none)` means the field is unused and the change is free. Anything else is 
 put at risk, and the option names in your mutation must match the existing ones exactly.
 
 ```bash
-gh auth refresh -s project
+gh auth refresh -s project   # interactive, and changes the token's scopes: the operator runs it, not you
 
 FIELD_ID=$(gh api graphql -f query='{ node(id: "<project-id>") { ... on ProjectV2 {
   fields(first: 30) { nodes { ... on ProjectV2SingleSelectField { id name } } } } } }' \
@@ -368,8 +372,7 @@ mutation {
   updateProjectV2Field(input: {
     fieldId: \"$FIELD_ID\"
     singleSelectOptions: [
-      {name: \"P0\", color: RED,    description: \"…\"}
-      {name: \"P1\", color: ORANGE, description: \"…\"}
+      <every current option, verbatim, plus the new one — each {name: \"…\", color: <its existing colour>, description: \"…\"}>
     ]
   }) { projectV2Field { ... on ProjectV2SingleSelectField { name options { name } } } }
 }"

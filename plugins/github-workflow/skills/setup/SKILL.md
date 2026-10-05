@@ -22,8 +22,9 @@ Plugin files used below:
 
 ```bash
 gh auth status
-gh repo view --json nameWithOwner,defaultBranchRef,viewerPermission,hasDiscussionsEnabled \
-  -q '"\(.nameWithOwner) default=\(.defaultBranchRef.name) permission=\(.viewerPermission) discussions=\(.hasDiscussionsEnabled)"'
+gh repo view --json nameWithOwner,defaultBranchRef,viewerPermission,hasDiscussionsEnabled,visibility \
+  -q '"\(.nameWithOwner) default=\(.defaultBranchRef.name) permission=\(.viewerPermission) discussions=\(.hasDiscussionsEnabled) visibility=\(.visibility)"'
+gh api "repos/{owner}/{repo}/private-vulnerability-reporting" -q .enabled   # PUBLIC repositories only
 git rev-parse --show-toplevel
 ```
 
@@ -34,6 +35,12 @@ from there (`cd "$(git rev-parse --show-toplevel)"`).
 - Not a GitHub repository, or `gh` not authenticated → stop and say so.
 - `permission` below `WRITE` (`READ`, `TRIAGE`) → warn that creating labels will probably fail, and
   ask whether to continue preparing the files for a maintainer to commit.
+- Private vulnerability reporting `false`, or `visibility` not `PUBLIC` (the feature is public-only,
+  and the call answers 404) → the "Security vulnerability" contact link would dead-end, and it
+  tells reporters not to open a public issue. Plan (step 4) to point it at
+  `https://github.com/<owner/name>/security/policy` when the repository has a `SECURITY.md` (at the
+  root, in `docs/` or in `.github/`), and to drop it otherwise. A public repository whose call
+  fails → unknown: report the error and ask which applies.
 - `.github/github-workflow.json` already exists → this is a **re-run**: show the current file and
   treat every step as an update. Labels are idempotent; files get a diff, never a blind overwrite.
 
@@ -73,6 +80,27 @@ and the files that will be written, marking each that **already exists**:
 | `.github/ISSUE_TEMPLATE/1-bug.yml` … `4-chore.yml` | `assets/ISSUE_TEMPLATE/` |
 | `.github/ISSUE_TEMPLATE/config.yml` | `assets/ISSUE_TEMPLATE/config.yml`, `OWNER/REPO` filled in |
 | `.github/pull_request_template.md` | `assets/pull_request_template.md` |
+
+GitHub also reads files the table's paths miss: a PR description file in any letter case, at the
+root, in `docs/` or in `.github/`, or a `PULL_REQUEST_TEMPLATE/` directory there; and every file in
+`.github/ISSUE_TEMPLATE/` appears in the issue chooser. List them, leaving out the table's paths:
+
+```bash
+git ls-files -co --exclude-standard \
+  | grep -iE '^(docs/|\.github/)?(pull_request_template|issue_template)(\.[a-z]+$|/)' \
+  | grep -vE '^\.github/(pull_request_template\.md|ISSUE_TEMPLATE/(1-bug|2-feature|3-enhancement|4-chore|config)\.yml)$'
+```
+
+A hit that differs from a table path **only in letter case** (`.github/PULL_REQUEST_TEMPLATE.md`)
+is the same file on Windows and macOS. It is that table row's existing file: show the diff in step
+6.4 and write into it under its own spelling, or first rename it to the table's spelling with
+`git mv`. **Never `git rm` it** — that removes the file this run writes.
+
+For every other hit, ask whether the new files **replace** it (`git rm` it in step 9), **sit
+beside** it, or are **skipped**. Two PR description files, or two bug forms in the chooser, is the
+outcome to avoid. Say too that the installed `config.yml` sets `blank_issues_enabled: false`, so
+the chooser stops offering a blank issue, and what happens to its Security contact link (step 1):
+kept, pointed at the security policy, or dropped.
 
 On a **re-run** (`.github/github-workflow.json` already exists), write the proposed config (the
 shape in step 6.2) to a temporary file outside the repository, and pass `--config <that file>`
@@ -146,9 +174,12 @@ cd ../adopt-github-workflow
 
 3. Copy the issue forms and the PR template. In `config.yml` replace `OWNER/REPO` with the
    repository, and **delete the Discussions contact link** when `hasDiscussionsEnabled` was false —
-   a link to a disabled Discussions tab is a 404. Edit with your file tools, not `sed -i` (its
+   a link to a disabled Discussions tab is a 404. When step 1 found the Security link would
+   dead-end, repoint or delete it as planned in step 4; on a repoint, change its `about` to
+   say the policy explains how to report privately. Edit with your file tools, not `sed -i` (its
    flags differ between GNU and BSD).
 4. Any file that already existed: show the diff and get a yes for that file. Never overwrite blind.
+   For the other PR and issue files step 4 found, do what the operator chose there.
 
 ## 7. Optional extras — ask about each
 
@@ -187,8 +218,10 @@ done
 Nothing is committed. Propose the commands below, on `<branch>` from step 5, and
 ask before running any of them. The `git add` names **exactly the files this run wrote**, by path:
 add each step 7 extra that was written (`.github/GITHUB_WORKFLOW.md`, the three scripts in
-`.github/scripts/`, `AGENTS.md`, `CLAUDE.md`) and drop anything that was skipped. Label the PR with
-one of the configured areas, `ci` if it was kept:
+`.github/scripts/`, `AGENTS.md`, `CLAUDE.md`), drop anything that was skipped, and add a
+`git rm <path>` for each file step 4 replaced. A case variant kept under its own spelling is staged
+under that spelling: `git add` of the table's spelling stages nothing there. Label the PR with one
+of the configured areas, `ci` if it was kept:
 
 ```bash
 git add \

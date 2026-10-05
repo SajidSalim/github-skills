@@ -1,8 +1,10 @@
 ## GitHub workflow
 
 All GitHub work — issues, branches, commits, pull requests, labels, the project board — follows
-the github-workflow protocol. Read `.github/GITHUB_WORKFLOW.md` (this repository's decisions)
-before creating an issue, picking one up, opening a PR or closing anything. The short version:
+the github-workflow protocol
+(https://github.com/SajidSalim/github-skills/tree/main/plugins/github-workflow/skills/github-workflow).
+Read `.github/GITHUB_WORKFLOW.md`, if present (this repository's decisions), before creating an
+issue, picking one up, opening a PR or closing anything. The short version:
 
 - **Never create an issue without asking the person running you.** Search first, all states —
   `bash .github/scripts/find-duplicates.sh "<title>"` if the scripts are installed — and show what

@@ -37,7 +37,7 @@ gh issue list --label "status:in-progress" --state open --json number,title,upda
 ## Duplicate check — run before filing anything
 
 ```bash
-bash <skill-dir>/scripts/find-duplicates.sh "<the title you intend to file>"
+bash "<skill-dir>/scripts/find-duplicates.sh" "<the title you intend to file>"
 ```
 
 Or by hand — four queries, **always `--state all`**, because the closed issues carry the decisions:
@@ -151,14 +151,14 @@ gh issue comment 231 --edit-last --body-file /tmp/updated.md   # amend your own 
 ## Branching
 
 ```bash
-gh issue develop 231 --name fix/231-checkout-blank-coupon --base main --checkout
+gh issue develop 231 --name fix/231-checkout-blank-coupon --checkout
 gh issue develop 231 --list                                    # branches already linked to it
 # WARNING: the link this creates closes #231 when a PR from that branch merges, whatever
 # your closing keywords say. Link an issue only if it should certainly close; otherwise use
 # `git checkout -b`. On a multi-issue branch only ONE issue can be linked -- pick the certain one.
 
 # Not your checkout, or it holds changes you did not make: never switch it -- use a worktree.
-gh issue develop 231 --name fix/231-checkout-blank-coupon --base main
+gh issue develop 231 --name fix/231-checkout-blank-coupon
 git fetch origin fix/231-checkout-blank-coupon
 git worktree add ../231-checkout-blank-coupon fix/231-checkout-blank-coupon
 ```
@@ -171,7 +171,7 @@ For a multi-issue branch, run this for the one issue that should certainly close
 ## Pull requests
 
 ```bash
-gh pr create --base main \
+gh pr create \
   --title "fix(checkout): treat a blank coupon code as no coupon" \
   --body-file pr.md \
   --label "type:bug,area:checkout" \
@@ -225,7 +225,7 @@ Note `--comment` takes a string, not a file — `"$(cat file)"` is the reliable 
 gh label list --limit 200
 gh label create "type:feature" --color "0E8A16" --description "New capability" --force
 gh label edit "type:bug" --color "D73A4A"
-gh label delete "wontfix" --yes
+gh label delete "wontfix" --yes                                # destructive: strips it from every issue — the operator's call, never yours
 gh label clone owner/other-repo                                # copy a whole label set across repos
 ```
 
@@ -247,7 +247,7 @@ gh issue list --state closed --limit 50 --json number,title,closedAt
 gh search issues --assignee "@me" --state open
 
 # Check the whole backlog against the label taxonomy
-bash <skill-dir>/scripts/lint-issue-labels.sh --all --state all
+bash "<skill-dir>/scripts/lint-issue-labels.sh" --all --state all --limit 5000
 ```
 
 ## CRLF — the trap on Windows
@@ -286,7 +286,7 @@ Prefer `--jq` where one command can do it. Reach for piped `jq` only when combin
 
 ### `NOT RUNNING` from the hook self-check
 
-`/github-workflow:doctor` (or `node <skill-dir>/../../hooks/check-issue-workflow.mjs --self-check`) reports `NOT RUNNING` when the label linter cannot find `jq` — the state the taxonomy gate otherwise **degrades to a silent pass** on, so a green issue create proves nothing until it reports ready.
+`/github-workflow:doctor` (or `node "<skill-dir>/../../hooks/check-issue-workflow.mjs" --self-check`) reports `NOT RUNNING` when the label linter cannot find `jq` — the state the taxonomy gate otherwise **degrades to a silent pass** on, so a green issue create proves nothing until it reports ready.
 
 Restarting the editor will probably not fix it. A winget install lands on the *persisted* user
 `PATH`, but a process inherits its environment from whatever launched it, and on Windows that parent
@@ -310,7 +310,7 @@ cp "$LOCALAPPDATA/Microsoft/WinGet/Packages/jqlang.jq_"*/jq.exe ~/bin/   # ~/bin
 | Assignment appears to do nothing | Account lacks write access, or the assignee is not a repo collaborator |
 | Issue not closed after PR merge | PR targeted a non-default branch, or the keyword lacked its own `closes` |
 | Markdown mangled in a comment | Used `--body` for multi-line. Use `--body-file` |
-| `gh: Not Found (HTTP 404)` on a project command | Wrong `--owner` (user vs org), or the token lacks the scope: `gh auth refresh -s read:project` to read, `-s project` to move cards |
+| `gh: Not Found (HTTP 404)` on a project command | Wrong `--owner` (user vs org), or the token lacks the scope: `gh auth refresh -s read:project` to read, `-s project` to move cards. Both are interactive and change the token's scopes: ask the operator to run them |
 | `missing required scopes [read:project]` | The token cannot read boards. **This is not "no board"** — do not fall back to labels-only on it. Refresh the scope, or report that board state is unknown |
 | `gh project list` returns nothing, but a board exists | **Expected, not a bug.** It lists projects owned by a login *and visible to you*; a board owned by someone else returns empty and exit 0. Never use it as the board check — use the repo-scoped query below |
 | `Status` value rejected on `item-edit` | The option name does not match. Option names are per-board — read them first ([project-board.md](project-board.md)) |

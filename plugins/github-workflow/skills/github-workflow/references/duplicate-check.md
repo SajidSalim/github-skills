@@ -79,8 +79,8 @@ gh search issues --repo "$R" --match title,body,comments "coupon_code"
 Or run all four at once:
 
 ```bash
-bash <skill-dir>/scripts/find-duplicates.sh "Checkout returns 500 when the coupon code is blank"
-bash <skill-dir>/scripts/find-duplicates.sh "Per-region shipping rates" shipping rate region   # explicit terms
+bash "<skill-dir>/scripts/find-duplicates.sh" "Checkout returns 500 when the coupon code is blank"
+bash "<skill-dir>/scripts/find-duplicates.sh" "Per-region shipping rates" shipping rate region   # explicit terms
 ```
 
 Two things the script does that are worth understanding before you read its output:

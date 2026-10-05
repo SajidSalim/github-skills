@@ -12,8 +12,14 @@
    claude plugin validate plugins/github-workflow --strict
    claude plugin validate . --strict
    ```
-4. Commit on a branch, open a PR, let CI pass, and merge it into `main`.
-5. Then, on an up-to-date `main` (`git switch main && git pull --ff-only`), tag:
+4. Once per release, run the adoption flow live; the suites only pin the setup and doctor skills'
+   text. In a throwaway GitHub repository, start
+   `claude --plugin-dir <this checkout>/plugins/github-workflow` and type
+   `/github-workflow:setup --dry-run`, `/github-workflow:setup` and `/github-workflow:doctor`
+   (both skills are user-only). Check that the doctor's mode row reads `adopted`, then delete the
+   repository.
+5. Commit on a branch, open a PR, let CI pass, and merge it into `main`.
+6. Then, on an up-to-date `main` (`git switch main && git pull --ff-only`), tag:
    `claude plugin tag plugins/github-workflow --push` — creates `github-workflow--v<version>`
    after checking that `plugin.json` and the marketplace entry agree. It tags whatever is checked
    out and does not check the branch, so never run it on a feature branch: a squash merge would

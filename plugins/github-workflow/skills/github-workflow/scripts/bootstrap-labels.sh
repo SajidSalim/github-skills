@@ -17,7 +17,9 @@
 #
 # SETTINGS. Without --config, the repository's .github/github-workflow.json is read when it
 # exists: `areas` becomes the area: set and `"inFlightState": "board"` implies --board. Flags
-# beat the config. With neither, the generic areas are used in labels-only mode.
+# beat the config. With neither, the generic areas are used in labels-only mode. A found
+# config is ignored, with a note, when --repo is given and its `repo` names another repository
+# or is missing.
 #
 # BOARD MODE. A repo whose GitHub Projects board owns in-flight state must not also carry
 # status:in-progress and status:needs-review -- two writers for one fact is how state goes
@@ -52,12 +54,28 @@ done
 
 # ---------------------------------------------------------------- settings
 
+DISCOVERED=false
 if [[ -z "$CONFIG" ]]; then
   root=$(git rev-parse --show-toplevel 2>/dev/null || true)
   if [[ -n "$root" && -f "$root/.github/github-workflow.json" ]]; then
     CONFIG="$root/.github/github-workflow.json"
+    DISCOVERED=true
   fi
 fi
+
+# `owner/name`, lower-cased, from any form gh accepts for --repo (a URL, a host prefix, a `.git`
+# suffix); empty if it is not one. Mirrors the hook's normalizeRepo, so both compare alike.
+norm_repo() {
+  printf '%s\n' "$1" | awk '{
+    s = $0
+    gsub(/^[ \t]+|[ \t]+$/, "", s)
+    sub(/^[A-Za-z][A-Za-z0-9+.-]*:\/\//, "", s)
+    sub(/\.[Gg][Ii][Tt]$/, "", s)
+    n = split(s, p, "/"); k = 0
+    for (i = 1; i <= n; i++) if (p[i] != "") q[++k] = p[i]
+    if (k >= 2) print tolower(q[k-1] "/" q[k])
+  }'
+}
 
 CONFIG_AREAS=""
 if [[ -n "$CONFIG" ]]; then
@@ -69,6 +87,18 @@ if [[ -n "$CONFIG" ]]; then
   if ! jq -e 'type == "object" and .version == 1 and ((.areas // []) | type == "array")' >/dev/null 2>&1 <<<"$json"; then
     echo "not a valid config (a JSON object with \"version\": 1 and an \"areas\" array): $CONFIG -- fix it, or run /github-workflow:doctor" >&2
     exit 2
+  fi
+  # A config found in this checkout describes this checkout's repository. Another --repo gets
+  # none of its settings, exactly as the hook treats it as guest: a `repo` naming another
+  # repository, or no `repo` at all, since then nothing says which repository it describes.
+  # --config is the operator naming the settings outright, so it applies to any --repo.
+  if $DISCOVERED && [[ -n "$REPO" ]]; then
+    cfg_repo=$(jq -r '.repo // "" | tostring' <<<"$json" | tr -d '\r')
+    want=$(norm_repo "$cfg_repo")
+    if [[ -z "$want" || "$want" != "$(norm_repo "$REPO")" ]]; then
+      echo "note: $CONFIG describes ${cfg_repo:-no repo}, not $REPO -- ignoring it (pass --config to use it)" >&2
+      json='{"version":1}'
+    fi
   fi
   CONFIG_AREAS=$(jq -r '(.areas // []) | map(tostring) | join(",")' <<<"$json" | tr -d '\r')
   if [[ "$(jq -r '.inFlightState // "labels"' <<<"$json" | tr -d '\r')" == "board" ]]; then
