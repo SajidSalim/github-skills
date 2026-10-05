@@ -31,11 +31,12 @@ test_shipped_scripts_start_with_a_bash_shebang() {
 }
 
 # dash and busybox ash reject these, and macOS's bash-as-sh would hide it. Comments are skipped.
-# shellcheck -s sh (in CI) and checkbashisms, when installed, check the same file more fully.
+# The grep is a fallback for machines without shellcheck, and catches only common bashisms:
+# `shellcheck -s sh` (run here when installed, and always in CI) and checkbashisms are the real check.
 test_the_hook_launcher_has_no_bashisms() {
   local f="$PLUGIN_ROOT/$_LAUNCHER" hits
   hits=$(grep -n -v -E '^[[:space:]]*#' "$f" | grep -E \
-    '\[\[|BASH_SOURCE|\$\{[A-Za-z_][A-Za-z0-9_]*(/|:[0-9-]|\^|,)|\$\{#?[A-Za-z_][A-Za-z0-9_]*\[|^[^#]*[A-Za-z_][A-Za-z0-9_]*=\(|<<<|\$'"'"'|(^|[[:space:];:])(local|declare|typeset|shopt|source|function|select|let|mapfile|readarray)([[:space:]]|$)|pipefail|==|&>|\$RANDOM|\$\(\(.*\*\*' \
+    '\[\[|BASH_SOURCE|\$\{[A-Za-z_][A-Za-z0-9_]*(/|:[0-9-]|\^|,)|\$\{#?[A-Za-z_][A-Za-z0-9_]*\[|\$\{!|^[^#]*[A-Za-z_][A-Za-z0-9_]*=\(|<<<|<\(|>\(|\$'"'"'|(^|[[:space:];:])(local|declare|typeset|shopt|source|function|select|let|mapfile|readarray|pushd|popd)([[:space:]]|$)|pipefail|==|&>|\$RANDOM|\$\(\(.*\*\*|echo -e|printf -v|type -P|read -a|test -v|\[ -a |trap .* ERR|(^|[^$])\{[A-Za-z0-9_./-]*,[A-Za-z0-9_.,/-]*\}' \
     || true)
   [[ -z "$hits" ]] || { printf 'bashisms in the POSIX sh launcher:\n%s\n' "$hits" >&2; return 1; }
   if command -v checkbashisms >/dev/null 2>&1; then checkbashisms "$f"; fi

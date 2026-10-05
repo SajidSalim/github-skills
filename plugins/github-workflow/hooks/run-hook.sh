@@ -36,7 +36,8 @@ IFS=$saved_ifs
 [ -n "$node" ] || exit 0
 
 # `sh <path>` sets $0 to the path. Claude Code may pass a Windows path with backslashes:
-# normalise them to slashes, without a subprocess, before taking the directory.
+# normalise them to slashes, without a subprocess, before taking the directory. Every backslash
+# is taken for a Windows separator, so a POSIX directory name holding one is not supported.
 src=$0
 case $src in
   *\\*)

@@ -56,7 +56,7 @@ Restart Claude Code to load it. Update later with
 | `jq` | ≥ 1.6, the real binary | The scripts and the label-taxonomy gate pipe to it. `gh --jq` is a different, embedded implementation and does not count |
 | Node.js | ≥ 18 | Runs the hook. Without Node the hook exits quietly and **every gate is off**; `/github-workflow:doctor` says so. Claude Code's native installer does not bring Node with it |
 | `bash` | ≥ 3.2 | The scripts. macOS's stock `/bin/bash` works; on Windows, Git Bash |
-| `/bin/sh` | any POSIX sh | Starts the hook launcher: dash, busybox ash and macOS's `/bin/sh` all work. On Windows, Git Bash provides it; without Git for Windows, Claude Code runs hooks in PowerShell, which cannot start the launcher, and every gate is off |
+| `/bin/sh` | any POSIX sh | Starts the hook launcher: dash, busybox ash and macOS's `/bin/sh` all work. On Windows, Git Bash provides it. The hooks set `"shell": "bash"`, so without Git for Windows Claude Code reports that Git Bash was not found and runs none of them: **every gate is off**. A bash it does not detect as Git Bash (MSYS2, Cygwin) does not count, and a system with no `/bin/sh` (Termux) cannot start the launcher |
 
 ## Quick start
 
@@ -245,14 +245,17 @@ other agents follow the protocol because their instructions say so, not because 
 
 The hooks run in whatever repository you open, before you approve anything, so they never run a
 program from it. `hooks/hooks.json` starts the launcher as `/bin/sh` by absolute path, so Claude
-Code looks nothing up on `PATH` to start it; on Windows, `/bin/sh` is Git Bash's own `sh.exe`. The
-launcher and the hook find `node`, `git` and `bash` only in absolute `PATH` entries, and git runs
-with `core.fsmonitor` off.
+Code looks nothing up on `PATH` to start it, and every hook sets `"shell": "bash"`. On Windows,
+`/bin/sh` is then Git Bash's own `sh.exe`. Without Git Bash, Claude Code would otherwise hand a
+hook to PowerShell, which reads `/bin/sh` as `\bin\sh` on the current drive: on `C:` any local
+account can create that file. With `"shell": "bash"` it runs no hook there instead. The launcher
+and the hook find `node`, `git` and `bash` only in absolute `PATH` entries, and git runs with
+`core.fsmonitor` off.
 
-An empty or relative `PATH` entry (`.`, a leading `:`, a `::`) is still a risk outside the plugin.
-Ahead of a program's own directory, or anywhere on a machine without that program, it means that
-for any command that runs bash, node or git by name from the session's directory, your own and the
-Bash tool's included,
+An empty or relative `PATH` entry (`.`, a leading `:`, a `::`) is still a risk outside the plugin,
+for commands that run bash, node or git by name from the session's directory, yours and the Bash
+tool's included. If the entry comes before the real program's directory, or the program is not
+installed,
 a program planted in the working directory could run in place of bash, node or git.
 `/github-workflow:doctor` shows a `PATH  warning` row naming every empty or relative entry; remove
 them from `PATH`.

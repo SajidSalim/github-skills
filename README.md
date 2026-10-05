@@ -195,7 +195,7 @@ workflow. The hooks are Claude Code only.
 | [`jq`](https://jqlang.org) | ≥ 1.6, the real binary | The scripts and the label gate (`gh --jq` doesn't count) |
 | [Node.js](https://nodejs.org) | ≥ 18 | The hooks. **Without Node every gate is off**, and doctor says so |
 | `bash` | ≥ 3.2 | Scripts. macOS's `/bin/bash` works; on Windows, use Git Bash |
-| `/bin/sh` | any POSIX sh | Starts the hooks. On Windows, Git Bash provides it; without Git for Windows the gates are off |
+| `/bin/sh` | any POSIX sh | Starts the hooks. On Windows, Git Bash provides it; without Git for Windows, Claude Code runs none of the hooks (they require bash), so the gates are off |
 
 For a GitHub Projects board, also grant `read:project` (to read it) or `project` (to move cards):
 `gh auth refresh -s project`.

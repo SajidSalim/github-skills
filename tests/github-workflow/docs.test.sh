@@ -431,7 +431,8 @@ test_the_plugin_readme_covers_the_essentials() {
 test_the_path_entry_risk_is_documented() {
   local s
   for s in "a program planted in the working directory could run in place of bash, node or git" \
-           "PATH  warning" "starts the launcher as \`/bin/sh\` by absolute path"; do
+           "PATH  warning" "starts the launcher as \`/bin/sh\` by absolute path" \
+           "every hook sets \`\"shell\": \"bash\"\`"; do
     assert_contains "$(cat "$PLUGIN_ROOT/README.md")" "$s"
   done
   assert_contains "$(cat "$PLUGIN_ROOT/skills/doctor/SKILL.md")" "The \`PATH\` row reads \`warning\`"
