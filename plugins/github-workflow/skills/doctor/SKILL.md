@@ -27,12 +27,14 @@ reads `off -- plugin option discard_gate`, `off -- repo config` or `on`. Both ne
 `NOT RUNNING  git not found` means that gate lets everything through. Fix: put git's directory on
 `PATH` as an absolute entry.
 
-The `PATH` row reads `warning` when `PATH` has an empty or relative entry, and names it. Claude
-Code starts the hook as `bash` by name, looked up on `PATH` in the session's directory before any
-plugin code runs, so a program planted in the working directory could run in place of bash, node
-or git. That happens when the entry (`.`, a leading `:`, a `::`) comes before bash's own
-directory, or anywhere when bash is not installed; a trailing `:` is searched last. The gates still
-work; the risk is the user's environment. Fix: remove those entries from `PATH` where it is set — a
+The `PATH` row reads `warning` when `PATH` has an empty or relative entry, and names it. The
+plugin's own launch is not exposed: Claude Code starts the hook with `/bin/sh` by absolute path,
+and the hook finds node, git and bash in absolute entries only. Any other command that runs them
+by name from the session's directory is, the Bash tool's included: a program planted in the
+working directory could run in place of bash, node or git. That happens when the entry (`.`, a
+leading `:`, a `::`) comes before the real program's directory, or anywhere when it is not
+installed; a trailing `:` is searched last. The gates still work; the risk is the user's
+environment. Fix: remove those entries from `PATH` where it is set — a
 shell profile, or the environment variables on Windows. The row reads the Bash tool's `PATH`, which
 can differ from the one Claude Code itself has.
 

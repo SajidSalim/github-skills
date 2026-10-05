@@ -71,7 +71,8 @@ The validator holds two things for a human reviewer, by design. Paste this with 
 > anywhere else.
 >
 > **Hook launcher.** `hooks/hooks.json` runs `hooks/run-hook.sh` by literal path under
-> `${CLAUDE_PLUGIN_ROOT}`. The launcher looks for `node` on absolute `PATH` entries only, so a
+> `${CLAUDE_PLUGIN_ROOT}`, with `/bin/sh` by absolute path, so nothing is looked up on `PATH` to
+> start it. The launcher is POSIX sh and looks for `node` on absolute `PATH` entries only, so a
 > `node` file committed to a repository is never run, and executes the bundled
 > `hooks/check-issue-workflow.mjs`; without Node it exits 0. The hook is a single file with no
 > dependencies beyond Node's built-ins. It makes no network requests, installs nothing, runs no

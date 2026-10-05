@@ -1542,6 +1542,7 @@ describe("selfCheck — PATH entries that name the working directory", () => {
     assert.match(r.note, /an empty entry/);
     assert.match(r.note, /"bin"/);
     assert.match(r.note, /a program planted in the working directory could run in place of bash, node or git/);
+    assert.match(r.note, /for any command that runs them by name/, "not the plugin's own launch, which is /bin/sh");
     assert.deepEqual(row("/usr/bin:/bin", "linux"), { name: "PATH", ready: true, note: "absolute entries only" });
   });
 

@@ -2597,10 +2597,10 @@ export function selfCheck(cwd = process.cwd(), env = process.env, linter = LINTE
 
 /**
  * The self-check's PATH row: a warning naming each entry that resolves against the working
- * directory. hooks.json starts the launcher as `bash`, and the host looks that name up on PATH
- * before any of the plugin's code runs, so the hook cannot guard it: an empty or relative entry
- * would let a program in the repository run in its place. The hook itself and run-hook.sh skip
- * such entries for node, git and bash. On Windows an empty entry is left out: Git Bash, which runs
+ * directory. The plugin itself is not exposed: hooks.json starts the launcher as `/bin/sh` by
+ * absolute path, and the launcher and the hook skip such entries for node, git and bash. But any
+ * other command that runs bash, node or git by name from the session's directory, the Bash tool's
+ * included, would pick a planted one. On Windows an empty entry is left out: Git Bash, which runs
  * the hooks there, drops it when it converts PATH, while a relative one, `.` included, survives.
  */
 function pathRow(env, platform) {
@@ -2620,7 +2620,8 @@ function pathRow(env, platform) {
     warning: true,
     note:
       `relative to the working directory: ${named.join(", ")} -- a program planted in the working ` +
-      "directory could run in place of bash, node or git; remove these entries from PATH",
+      "directory could run in place of bash, node or git for any command that runs them by name; " +
+      "remove these entries from PATH",
   };
 }
 
