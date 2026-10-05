@@ -344,17 +344,22 @@ test_setup_finds_existing_templates_at_other_paths() {
 # The search runs as written in the skill: the files setup itself installs are left out, so
 # "replace" can never remove one, while their letter-case variants and the other paths stay in.
 test_setup_template_search_leaves_out_its_own_install_paths() {
-  local f="$PLUGIN_ROOT/skills/setup/SKILL.md" filters out
-  # The pipeline's grep stages, joined back into one pipeline.
-  filters=$(awk '/^git ls-files -co --exclude-standard/ {on=1; next} on && /^```/ {exit} on {print}' "$f" \
-    | sed -e 's/^ *| *//' -e 's/ *\\$//' | paste -s -d '|' -)
-  [[ "$filters" == grep* ]] || { echo "template search not found in setup" >&2; return 1; }
+  local f="$PLUGIN_ROOT/skills/setup/SKILL.md" stages stage re out
+  # The pipeline's grep stages, one per line. Each is `grep -FLAGS 'pattern'`: parsed and run
+  # with its arguments, never evaluated, so the test runs no text it read from a file.
+  stages=$(awk '/^git ls-files -co --exclude-standard/ {on=1; next} on && /^```/ {exit} on {print}' "$f" \
+    | sed -e 's/^ *| *//' -e 's/ *\\$//')
+  [[ -n "$stages" ]] || { echo "template search not found in setup" >&2; return 1; }
   out=$(printf '%s\n' \
     .github/pull_request_template.md .github/ISSUE_TEMPLATE/1-bug.yml .github/ISSUE_TEMPLATE/4-chore.yml \
     .github/ISSUE_TEMPLATE/config.yml .github/PULL_REQUEST_TEMPLATE.md docs/pull_request_template.md \
     .github/PULL_REQUEST_TEMPLATE/a.md .github/ISSUE_TEMPLATE/bug_report.yml src/pull_request_template.md \
-    .github/ISSUE_TEMPLATE/2-bug.yml \
-    | eval "$filters")
+    .github/ISSUE_TEMPLATE/2-bug.yml)
+  re="^grep (-[a-zA-Z]+) '([^']*)'\$"
+  while IFS= read -r stage; do
+    [[ "$stage" =~ $re ]] || { echo "unexpected template search stage: $stage" >&2; return 1; }
+    out=$(printf '%s\n' "$out" | grep "${BASH_REMATCH[1]}" -- "${BASH_REMATCH[2]}")
+  done <<< "$stages"
   # 2-bug.yml is the repository's own form, not setup's 1-bug.yml: it must get the question.
   assert_eq ".github/PULL_REQUEST_TEMPLATE.md
 docs/pull_request_template.md
