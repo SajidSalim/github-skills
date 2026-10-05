@@ -14,6 +14,7 @@ agents actually make.
 **Contents:**
 - [Why this exists](#why-this-exists)
 - [How it differs from a GitHub connector](#how-it-differs-from-a-github-connector)
+  (and [the Claude GitHub App](#and-the-claude-github-app))
 - [What you get](#what-you-get)
 - [Requirements](#requirements)
 - [Installation](#installation)
@@ -73,6 +74,27 @@ You can use both together. The one caveat is about enforcement:
   calls.
 - **What that means:** the skill's rules still guide the agent on those calls, but nothing enforces
   them. Let the agent use `gh` when you want the guarantees.
+
+### And the Claude GitHub App?
+
+The Claude GitHub App (`@claude` in an issue or PR, built on `claude-code-action`) is a different
+thing again. It runs Claude Code in GitHub Actions when something happens in the repository: a
+mention, an issue assignment, or a workflow you write. It can answer questions, implement an issue,
+open a PR and review one.
+
+| | Claude GitHub App | github-workflow |
+|---|---|---|
+| Where it runs | GitHub Actions | Your Claude Code session |
+| What starts it | `@claude`, an assignment, a workflow | You, or any task that touches GitHub |
+| Review a PR's code | Yes | No |
+| Duplicate checks | The action's example workflows flag open duplicates after an issue is filed | Searches open **and closed** issues before filing, and asks you first |
+| Labels | Whatever list the workflow's prompt gives it | One strict taxonomy, checked after every create or edit |
+| The issue-to-PR protocol and the gates | Not included | Yes |
+
+The overlap is small. The app decides **when** Claude works on GitHub; github-workflow decides
+**how** it behaves once it is working. Use the app for unattended runs and code review, and
+github-workflow when you work an issue with an agent beside you. github-workflow has not been
+tested inside `claude-code-action`.
 
 ## What you get
 
