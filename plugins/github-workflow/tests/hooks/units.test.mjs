@@ -158,6 +158,12 @@ describe("findGhTarget", () => {
     assert.deepEqual(findGhTargets(`gh pr view 1`), []);
   });
 
+  test("never inside a # comment", () => {
+    assert.equal(findGhTarget("# later: `gh pr create -b \"x\"`\ngit status"), null);
+    assert.equal(findGhTarget("# gh pr create -b x\ngit status"), null);
+    assert.equal(findGhTarget("echo a#b && gh pr create -b x").action, "create");
+  });
+
   test("never inside single quotes", () => {
     assert.equal(findGhTarget(`echo '$(gh pr create --body x)'`), null);
   });
@@ -334,6 +340,11 @@ describe("argValue", () => {
     assert.equal(argValue(["-bsome text"], ["--body", "-b"]), "some text");
     assert.equal(argValue(["-Bmain"], ["--body", "-b"]), null, "case matters");
   });
+  test("never reads another flag's value as an attached short form", () => {
+    assert.equal(argValue(["--title", "-bump deps", "--body", "x"], ["--body", "-b"]), "x");
+    assert.equal(argValue(["-t", "-Rename"], ["--repo", "-R"]), null);
+    assert.equal(argValue(["--draft", "-bx"], ["--body", "-b"]), "x", "a boolean flag takes no value");
+  });
 });
 
 describe("missingMarkers", () => {
@@ -481,6 +492,17 @@ describe("accidentalClosers", () => {
       "Small fix that can't regress checkout. Fixes #7",
       "Without this, checkout returns 500. Fixes #9",
       "No migration, doesn't touch the API -- closes #3",
+    ]) {
+      assert.deepEqual(accidentalClosers(body), [], `wrongly flagged: ${body}`);
+    }
+  });
+
+  test("a spaced dash, a closing quote or bracket after the stop, also end a clause", () => {
+    for (const body of [
+      "Doesn't touch the API — closes #3",
+      "Doesn't touch the API – closes #3",
+      "Not breaking.) Closes #3",
+      'It said "not yet." Closes #3',
     ]) {
       assert.deepEqual(accidentalClosers(body), [], `wrongly flagged: ${body}`);
     }
@@ -741,6 +763,11 @@ describe("resolveBody — bodies the shell builds", () => {
 
   test("a heredoc piped into gh's stdin is its --body-file - body", () => {
     assert.deepEqual(body(`cat <<'EOF' | gh pr create --body-file -\nRefs #12\nEOF`), { text: "Refs #12" });
+  });
+
+  test("so is one relayed through the pipeline, tee included", () => {
+    const cmd = `cat <<'A' | tee pr.md | gh pr create --body-file -\nThis does not close #12.\nA`;
+    assert.equal(accidentalClosers(body(cmd).text ?? "").length, 1);
   });
 
   test("a heredoc written to another file does not stand in for the body file", () => {

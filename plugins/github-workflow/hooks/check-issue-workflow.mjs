@@ -180,6 +180,12 @@ export function tokenize(cmd) {
       continue;
     }
 
+    // An unquoted `#` starting a word starts a comment, which runs to the end of the line.
+    if (c === "#" && !started) {
+      while (i < cmd.length && cmd[i] !== "\n") i++;
+      continue;
+    }
+
     const two = cmd.slice(i, i + 2);
     if (two === "&&" || two === "||") {
       flush();
@@ -529,6 +535,10 @@ function substitutionSpans(text, from, to) {
       i = e;
     } else if (c === '"') {
       dq = !dq;
+    } else if (c === "#" && !dq && (i === from || /[\s;&|(]/.test(text[i - 1]))) {
+      const e = text.indexOf("\n", i);
+      if (e === -1 || e >= to) break;
+      i = e; // a comment runs nothing
     } else if (c === "`") {
       const e = closeBacktick(text, i + 1, to);
       if (e === -1) break;
@@ -634,12 +644,17 @@ function shellAt(text, from, to, at, dir) {
   return { dir, depth: saved.length };
 }
 
-/** The heredocs fed to the simple command piped into `toks[i]`'s: `cat <<'EOF' | gh ...`. */
+/**
+ * The heredocs fed to the pipeline that ends in `toks[i]`'s command: `cat <<'EOF' | gh ...`, or
+ * relayed on, `cat <<'EOF' | tee pr.md | gh ...`.
+ */
 function pipedHeredocs(toks, i) {
-  if (!(toks[i - 1]?.op && toks[i - 1].v === "|")) return [];
   const ids = [];
-  for (let k = i - 2; k >= 0 && !toks[k].op; k--) {
-    for (const m of toks[k].v.matchAll(/__ghwf_heredoc_(\d+)__/g)) ids.push(Number(m[1]));
+  let k = i - 1;
+  while (toks[k]?.op && toks[k].v === "|") {
+    for (k--; k >= 0 && !toks[k].op; k--) {
+      for (const m of toks[k].v.matchAll(/__ghwf_heredoc_(\d+)__/g)) ids.push(Number(m[1]));
+    }
   }
   return ids;
 }
@@ -650,16 +665,28 @@ function pipedHeredocs(toks, i) {
  */
 function argAt(args, names) {
   for (let i = 0; i < args.length; i++) {
+    // `--title "-bump deps"`: a word that is another flag's value is never an attached form.
+    const isValue = i > 0 && takesValue(args[i - 1]);
     for (const n of names) {
       if (args[i] === n) return { index: i + 1, value: args[i + 1] ?? "" };
       if (args[i].startsWith(n + "=")) return { index: i, value: args[i].slice(n.length + 1) };
-      if (/^-[A-Za-z]$/.test(n) && args[i].length > 2 && args[i].startsWith(n)) {
+      if (!isValue && /^-[A-Za-z]$/.test(n) && args[i].length > 2 && args[i].startsWith(n)) {
         return { index: i, value: args[i].slice(2) };
       }
     }
   }
   return null;
 }
+
+// The flags of gh issue|pr create|edit that take no value.
+const GH_BOOLEAN = new Set([
+  "--draft", "-d", "--fill", "-f", "--fill-first", "--fill-verbose", "--web", "-w", "--dry-run",
+  "--no-maintainer-edit", "--remove-milestone", "--editor", "-e",
+]);
+
+/** Whether `word` is a flag whose value is the next word: `--title`, `-t`; not `--x=v`, `-tX`. */
+const takesValue = (word) =>
+  /^-[A-Za-z]$|^--[^=]+$/.test(word) && !GH_BOOLEAN.has(word);
 
 /** Value of `--name X`, `--name=X` or `-nX`, or null when absent. */
 export function argValue(args, names) {
@@ -1428,7 +1455,7 @@ export function accidentalClosers(body) {
         reason = "inside a blockquote";
       } else if (inCodeSpan(line, m.index)) {
         reason = "inside a `code span`";
-      } else if (NEGATORS.test(before.slice(-40).split(/[.!?;]\s+|\s(?:--|—|–)\s/).pop())) {
+      } else if (NEGATORS.test(before.slice(-40).split(/[.!?;]["')\]]*\s+|\s(?:--|—|–)\s/).pop())) {
         // Only the run-up within the keyword's own clause matters: "This does not close #17"
         // negates; "Closes #17. It does not fix the migration" and "Not a breaking change.
         // Closes #17" do not.
