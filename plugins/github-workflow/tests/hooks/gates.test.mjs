@@ -799,7 +799,40 @@ describe("PreToolUse — command shapes", () => {
     assert.equal(runHook(pre(`(cd . && gh issue create --title t --body x --repo acme/other)`, dir)).status, 0);
   });
 
-  //@@I2
+  // Every gh create|edit in the command is judged; any block wins.
+  test("a later gh pr create after a $(gh issue create ...) is still judged", () => {
+    const cmd = `N=$(gh issue create --title t --body x) && gh pr create --title t --body "This does not close #12."`;
+    assert.equal(runHook(pre(cmd, temp("guest"))).status, 2);
+    const ok = `N=$(gh issue create --title t --body x) && gh pr create --title t --body "Refs #12."`;
+    assert.equal(runHook(pre(ok, temp("guest"))).status, 0);
+  });
+
+  test("the first of two gh commands still blocks when the second is clean", () => {
+    const cmd = `gh pr create --title t --body "This does not close #12." && gh pr edit 3 --add-label x`;
+    assert.equal(runHook(pre(cmd, temp("guest"))).status, 2);
+  });
+
+  test("adopted: an issue create after a clean pr create is still asked for its record", () => {
+    const cmd = `gh pr create --title t --body "Refs #1" && gh issue create --title t --body plain`;
+    assert.equal(runHook(pre(cmd, repoDir(ADOPTED))).status, 2);
+  });
+
+  // The repository gh acts in is the one it runs in: after a cd, that checkout's mode and config.
+  test("after cd into another checkout, that checkout decides the mode", () => {
+    const adopted = repoDir(ADOPTED);
+    const guest = repoDir();
+    const create = `gh issue create --title t --body plain`;
+    assert.equal(runHook(pre(`cd "${guest.replace(/\\/g, "/")}" && ${create}`, adopted)).status, 0);
+    assert.equal(runHook(pre(`cd "${adopted.replace(/\\/g, "/")}" && ${create}`, guest)).status, 2);
+    assert.equal(runHook(pre(`cd "$ELSEWHERE" && ${create}`, adopted)).status, 0, "unknown: guest");
+  });
+
+  // An agent writes the variable as a prefix far more often than it exports it.
+  test("a GH_REPO=x prefix on the gh command names the repository", () => {
+    const dir = repoDir(ADOPTED);
+    assert.equal(runHook(pre(`GH_REPO=acme/other gh issue create --title t --body plain`, dir)).status, 0);
+    assert.equal(runHook(pre(`env GH_REPO=acme/shop gh issue create --title t --body plain`, dir)).status, 2);
+  });
 
   test("a --body-file after a cd the hook cannot follow is skipped, never read from the wrong place", () => {
     const dir = temp("guest");

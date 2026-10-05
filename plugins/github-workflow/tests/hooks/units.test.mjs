@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join, delimiter, resolve } from "node:path";
 
 import {
-  tokenize, stripHeredocs, findGhTarget, argValue, resolveBody, missingMarkers,
+  tokenize, stripHeredocs, findGhTarget, findGhTargets, argValue, resolveBody, missingMarkers,
   accidentalClosers, issueNumber, hasDeployImpact, changedFiles,
   parseConfig, loadRepoContext, normalizeRepo, isAdopted, closingOptionOff,
   closingGateEnabled, globToRegExp, deployTriggersIn, deployBases, LINTER, FIND_DUPLICATES,
@@ -149,6 +149,13 @@ describe("findGhTarget", () => {
     assert.deepEqual(findGhTarget(`(cd sub && gh pr create --repo a/b)`).args, ["--repo", "a/b"]);
     assert.deepEqual(findGhTarget(`( (cd sub && gh pr create -b "x)"))`).args, ["-b", "x)"]);
     assert.deepEqual(findGhTarget(`(cd sub) && gh pr create -b x`).args, ["-b", "x"]);
+  });
+
+  test("findGhTargets lists every create|edit in shell order, not those inside a gh's own args", () => {
+    const all = findGhTargets(`N=$(gh issue create -b x) && GH_REPO=o/r gh pr create --body "$(gh issue view 1)"`);
+    assert.deepEqual(all.map((f) => `${f.kind} ${f.action}`), ["issue create", "pr create"]);
+    assert.deepEqual(all.map((f) => f.envRepo), [null, "o/r"]);
+    assert.deepEqual(findGhTargets(`gh pr view 1`), []);
   });
 
   test("never inside single quotes", () => {

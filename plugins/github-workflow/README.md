@@ -100,8 +100,8 @@ protocol by committing `.github/github-workflow.json`, and everywhere else the p
 | **Guest** | no `.github/github-workflow.json` at the repository root | the ten rules, adapted to the repository's own labels and conventions — no labels are created, and protocol comments in a repository you do not maintain are posted only after asking; only the closing-keyword and discard gates are enforced |
 | **Adopted** | the file exists, and a command's `--repo` (if any) names the repository it describes | the full protocol; every gate below is enforced |
 
-The config is read from the root of the git repository, so commands run from a subdirectory are
-covered. A `gh … --repo X` command gets the repository gates only when `X` is the configured
+The config is read from the root of the git repository the command runs in, after any `cd` before
+`gh` in the same command, so commands run from a subdirectory are covered. A `gh … --repo X` command gets the repository gates only when `X` is the configured
 repository (URL and `HOST/OWNER/REPO` forms and any case match). An edit target given by URL, and
 `GH_REPO`, name the repository the same way.
 

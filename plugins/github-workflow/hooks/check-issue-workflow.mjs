@@ -20,7 +20,8 @@
  *
  * "Adopted" means the repository has .github/github-workflow.json and, when the command names
  * a repo -- with --repo, an edit target's URL, or GH_REPO -- that it is the repo the config
- * describes. Everything else is guest mode,
+ * describes. A gh command's repository is the checkout it runs in, after any `cd` before it in the
+ * same command; every gh create|edit in a command is judged. Everything else is guest mode,
  * where only the closing-keyword and discard gates run. For an edit, the repository is the one
  * holding the FILE, never the session's cwd: a subagent in a worktree can write into the main
  * checkout, and that is the case the branch gate exists for.
@@ -366,43 +367,56 @@ function writesIn(toks) {
  * (`gh pr -R o/r create`) is moved to the end of the args.
  *
  * With `cwd`, also `dir`: the directory gh runs in, following any `cd` before it in the same
- * command, or null when that cannot be known (a `cd "$X"`).
+ * command, or null when that cannot be known (a `cd "$X"`). `envRepo` is a `GH_REPO=x` assignment
+ * written before gh in its own command, or null.
  */
 export function findGhTarget(cmd, cwd) {
-  const scan = scanHeredocs(cmd, markOf);
-  const lineAt = (offset) => scan.lineOf[(scan.text.slice(0, offset).match(/\n/g) || []).length];
-  const hit = ghIn(scan.text, 0, scan.text.length, []);
-  if (!hit) return null;
-
-  const { toks, i, t, kind, action, args, expands, last, levels } = hit;
-  const found = {
-    kind,
-    action,
-    args,
-    expands,
-    line: lineAt(t.at),
-    endLine: lineAt(last.end - 1),
-    at: t.at,
-    end: last.end,
-    piped: pipedHeredocs(toks, i),
-    writes: writesIn(tokenize(scan.text).filter((w) => w.end <= t.at)),
-  };
-  if (typeof cwd === "string" && cwd) {
-    let dir = resolve(cwd);
-    levels.forEach((level, k) => {
-      dir = dirAt(scan.text, level.from, level.to, k + 1 < levels.length ? levels[k + 1].from : t.at, dir);
-    });
-    found.dir = dir;
-  }
-  return found;
+  return findGhTargets(cmd, cwd)[0] ?? null;
 }
 
+/** Every `gh issue|pr create|edit` in `cmd`, in the order the shell meets them, as findGhTarget. */
+export function findGhTargets(cmd, cwd) {
+  const scan = scanHeredocs(cmd, markOf);
+  const lineAt = (offset) => scan.lineOf[(scan.text.slice(0, offset).match(/\n/g) || []).length];
+  const hits = [];
+  ghIn(scan.text, 0, scan.text.length, [], hits, 0);
+  hits.sort((x, y) => x.t.at - y.t.at);
+
+  return hits.map(({ toks, i, t, kind, action, args, expands, last, levels, envRepo }) => {
+    const found = {
+      kind,
+      action,
+      args,
+      expands,
+      envRepo,
+      line: lineAt(t.at),
+      endLine: lineAt(last.end - 1),
+      at: t.at,
+      end: last.end,
+      piped: pipedHeredocs(toks, i),
+      writes: writesIn(tokenize(scan.text).filter((w) => w.end <= t.at)),
+    };
+    if (typeof cwd === "string" && cwd) {
+      let dir = resolve(cwd);
+      levels.forEach((level, k) => {
+        dir = dirAt(scan.text, level.from, level.to, k + 1 < levels.length ? levels[k + 1].from : t.at, dir);
+      });
+      found.dir = dir;
+    }
+    return found;
+  });
+}
+
+// Command substitutions nested deeper than this are not searched: no real command needs it, and
+// the search recurses.
+const MAX_NESTING = 32;
+
 /**
- * The first `gh issue|pr create|edit` in `text[from, to)`, in the order the shell meets it, looking
- * inside command substitutions as it reaches them. `levels` are the ranges searched so far, outermost
- * first.
+ * Every `gh issue|pr create|edit` in `text[from, to)`, pushed onto `hits`, looking inside command
+ * substitutions as well. `levels` are the ranges searched so far, outermost first.
  */
-function ghIn(text, from, to, levels) {
+function ghIn(text, from, to, levels, hits, depth) {
+  if (depth > MAX_NESTING) return;
   const here = [...levels, { from, to }];
   const toks = tokenize(text.slice(from, to)).map((t) => ({ ...t, at: t.at + from, end: t.end + from }));
   const spans = substitutionSpans(text, from, to);
@@ -417,8 +431,7 @@ function ghIn(text, from, to, levels) {
     if (span) {
       if (!tried.has(span)) {
         tried.add(span);
-        const inner = ghIn(text, span.from, span.to, here);
-        if (inner) return inner;
+        ghIn(text, span.from, span.to, here, hits, depth + 1);
       }
       continue;
     }
@@ -454,7 +467,8 @@ function ghIn(text, from, to, levels) {
     // Subshells open around gh: its own `(gh`, and any opened earlier, `(cd x && gh ...)`.
     const around = opens + shellAt(text, from, to, t.at, null).depth;
     let open = around;
-    for (let k = j + 1; k < toks.length && !toks[k].op; k++) {
+    let k = j + 1;
+    for (; k < toks.length && !toks[k].op; k++) {
       last = toks[k];
       if (MARK.test(toks[k].v)) continue; // a heredoc operator, not an argument
       let v = toks[k].v;
@@ -476,15 +490,25 @@ function ghIn(text, from, to, levels) {
       args.push(m.v);
       expands.push(m.expands);
     }
-    return { toks, i, t, kind: a.v, action: b.v, args, expands, last, levels: here };
+    // `GH_REPO=o/r gh ...` (or after `env`) names the repository for this command alone.
+    let envRepo = null;
+    for (let p = i - 1; p >= 0 && !toks[p].op; p--) {
+      const m = /^GH_REPO=(.*)$/s.exec(toks[p].v.replace(/^\(+/, ""));
+      if (m && m[1].trim() !== "") {
+        envRepo = m[1].trim();
+        break;
+      }
+    }
+    hits.push({ toks, i, t, kind: a.v, action: b.v, args, expands, last, levels: here, envRepo });
+    // Its arguments' substitutions are its body's business, not separate gh commands to judge.
+    for (const s of spans) if (s.from < last.end && s.to > t.at) tried.add(s);
+    i = k;
   }
 
   for (const s of spans) {
     if (tried.has(s)) continue;
-    const inner = ghIn(text, s.from, s.to, here);
-    if (inner) return inner;
+    ghIn(text, s.from, s.to, here, hits, depth + 1);
   }
-  return null;
 }
 
 /**
@@ -2278,22 +2302,22 @@ function lossOf(git, dir, form, time = budget) {
 }
 
 function postToolUse({ kind, action, args, cwd, adopted, gates, payload, repo }) {
-  if (!adopted || gates.labelTaxonomy === false) process.exit(0);
+  if (!adopted || gates.labelTaxonomy === false) return;
 
   const n = issueNumber(action, args, stdoutOf(payload), kind);
   const bash = resolveExecutable("bash");
-  if (!n || !bash || !existsSync(LINTER)) process.exit(0);
+  if (!n || !bash || !existsSync(LINTER)) return;
 
   const argv = [slash(LINTER), n, ...(kind === "pr" ? ["--pr"] : []), ...(repo ? ["--repo", repo] : [])];
   const run = spawnSync(bash, argv, { cwd, encoding: "utf8", timeout: 40_000, env: absolutePathEnv() });
 
-  if (run.error || run.status === null || run.status === 0) process.exit(0);
+  if (run.error || run.status === null || run.status === 0) return;
 
   // Non-zero alone does not mean "violation". The linter also exits 1 for a missing jq, an
   // unauthenticated gh, a deleted issue, a network failure -- none of them the model's to fix.
   // A real violation always prints a FAIL line on stdout, so that is the discriminator.
   const report = run.stdout ?? "";
-  if (!/^\s*FAIL\s/m.test(report)) process.exit(0);
+  if (!/^\s*FAIL\s/m.test(report)) return;
 
   block(taxonomyMessage(kind, n, report));
 }
@@ -2445,25 +2469,26 @@ async function main() {
   // Decided first, acted on last: a block from the gh gates below wins over an ask.
   const reason = event === "PreToolUse" && command.includes("git") ? quietly(() => gitAsk(command, cwd, payload)) : null;
 
-  const found = command.includes("gh") ? findGhTarget(command, cwd) : null;
-  if (!found) {
-    if (reason) ask(reason);
-    process.exit(0);
-  }
+  // Every gh create|edit in the command is judged, in order; the first block wins.
+  const targets = command.includes("gh") ? findGhTargets(command, cwd) : [];
+  let warning = null;
+  for (const found of targets) {
+    // gh acts on the checkout it runs in: after a `cd`, that one. Unknown: guest, which fails open.
+    const where = found.dir === undefined ? cwd : found.dir;
+    const context = where === null ? {} : loadRepoContext(where);
+    const repo = ghRepo(found.args, found.envRepo ? { ...process.env, GH_REPO: found.envRepo } : process.env);
+    const adopted = isAdopted(context, repo);
+    const gates = adopted ? (context.config.gates ?? {}) : {};
+    const state = { ...found, cwd: where ?? cwd, dir: where, context, adopted, gates, payload, repo };
 
-  const context = loadRepoContext(cwd);
-  const repo = ghRepo(found.args);
-  const adopted = isAdopted(context, repo);
-  const gates = adopted ? (context.config.gates ?? {}) : {};
-  const state = { ...found, cwd, context, adopted, gates, payload, repo };
-
-  if (event === "PreToolUse") {
-    const warning = preToolUse({ ...state, sources: bodySources(command, found) });
-    if (reason) ask(reason, warning);
-    pass(warning);
+    if (event === "PreToolUse") {
+      const w = preToolUse({ ...state, sources: bodySources(command, found) });
+      warning ??= w;
+    }
+    if (event === "PostToolUse") postToolUse(state);
   }
-  if (event === "PostToolUse") postToolUse(state);
-  process.exit(0);
+  if (event === "PreToolUse" && reason) ask(reason, warning);
+  pass(event === "PreToolUse" ? warning : null);
 }
 
 const EDIT_TOOLS = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
