@@ -425,15 +425,18 @@ test_the_plugin_readme_covers_the_essentials() {
   done
 }
 
-# hooks.json starts the launcher as `bash`, a name the host resolves before the plugin runs: the
-# residual risk of an empty or relative PATH entry is stated, and doctor shows the row for it.
-test_the_bare_bash_launch_risk_is_documented() {
+# hooks.json starts the launcher as `/bin/sh`, so the plugin's own launch looks nothing up on
+# PATH. The residual risk of an empty or relative PATH entry, for other commands, is stated, and
+# doctor shows the row for it.
+test_the_path_entry_risk_is_documented() {
   local s
   for s in "a program planted in the working directory could run in place of bash, node or git" \
-           "PATH  warning"; do
+           "PATH  warning" "starts the launcher as \`/bin/sh\` by absolute path" \
+           "every hook sets \`\"shell\": \"bash\"\`"; do
     assert_contains "$(cat "$PLUGIN_ROOT/README.md")" "$s"
   done
   assert_contains "$(cat "$PLUGIN_ROOT/skills/doctor/SKILL.md")" "The \`PATH\` row reads \`warning\`"
+  assert_contains "$(cat "$PLUGIN_ROOT/skills/doctor/SKILL.md")" "starts the hook with \`/bin/sh\` by absolute path"
 }
 
 test_the_marketplace_readme_has_the_install_commands() {

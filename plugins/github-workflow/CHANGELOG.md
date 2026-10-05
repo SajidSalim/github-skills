@@ -4,6 +4,38 @@ All notable changes to this plugin are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.2] - 2026-10-05
+
+The hook launch no longer looks anything up on `PATH` (#31), and the test suite moved out of the
+installed plugin (#30).
+
+### Fixed
+
+- `hooks/hooks.json` starts the launcher as `/bin/sh "${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.sh"`
+  instead of `bash …`. Claude Code looked `bash` up on `PATH` in the session's directory, so with
+  an empty or relative entry a `bash` committed to the repository ran in its place. On Windows,
+  Git Bash resolves `/bin/sh` to its own `sh.exe` (#31).
+- Every hook sets `"shell": "bash"`. Without it, Claude Code on Windows without Git Bash hands a
+  hook to PowerShell, which reads `/bin/sh` as `\bin\sh` on the current drive and would run a
+  `bin\sh.cmd` planted there. With it, Claude Code reports that Git Bash was not found and runs
+  nothing (#31).
+- `run-hook.sh` is POSIX sh, so dash (Debian, Ubuntu), busybox ash (Alpine), macOS `/bin/sh` and
+  Git Bash's `sh` all run it; it still takes `node` from absolute `PATH` entries only and exits 0
+  without Node (#31).
+
+### Changed
+
+- The self-check's and doctor's `PATH` warning stays: an empty or relative entry still lets a
+  planted bash, node or git run for any other command that runs them by name. The README, the
+  doctor skill and the reviewer notes say so (#31).
+- Requirements list `/bin/sh`. Without Git for Windows, Claude Code runs none of the hooks, so the
+  gates are off there; with the `bash` launch they did not work there either (#31).
+- The test suite lives in `tests/github-workflow/` at the repository root, outside the installed
+  plugin (#30).
+- CI runs the `hooks.json` command through `sh -c` on Ubuntu, Windows and macOS and in an Alpine
+  container with no bash, checks on Windows that no hook can reach PowerShell and a planted
+  drive-root `bin\sh.cmd`, and shellchecks the launcher as POSIX sh (#31).
+
 ## [1.0.1] - 2026-10-05
 
 Hook edge cases (#23, #24, #25), the directory-listing icon (#28), and a record of the follow-ups

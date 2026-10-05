@@ -1145,8 +1145,9 @@ describe("self-check", () => {
     assert.match(selfCheck(hook, off).stdout, /discard gate\s+ready\s+off -- repo config/);
   });
 
-  // hooks.json starts the launcher as `bash`, a name the host looks up on PATH before any of the
-  // plugin's code runs. A relative entry there is the user's to fix, so the self-check shows it.
+  // The plugin's own launch no longer looks anything up on PATH, but a relative entry still lets a
+  // planted program run for any other command that runs bash, node or git by name. It is the
+  // user's to fix, so the self-check shows it.
   test("a relative PATH entry is a warning that names it, and still exits 0 when all is ready", () => {
     const key = Object.keys(process.env).find((k) => /^path$/i.test(k)) ?? "PATH";
     const hook = pluginTree("exit 0\n");

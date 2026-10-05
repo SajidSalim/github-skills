@@ -55,7 +55,8 @@ Restart Claude Code to load it. Update later with
 | GitHub CLI `gh` | ≥ 2.50.0, authenticated (`gh auth login`) with the `repo` scope; `read:project` to read a Projects board, `project` to move its cards | 2.50.0 is the first release whose `gh issue list --json` has `stateReason`, which the duplicate search needs. `--duplicate-of` and `--reason duplicate` need ≥ 2.88.0; `--parent`, `--add-sub-issue` and `--add-blocked-by` need ≥ 2.94.0. On an older `gh` the skill falls back to a "Duplicate of #N" comment or a cross-link comment |
 | `jq` | ≥ 1.6, the real binary | The scripts and the label-taxonomy gate pipe to it. `gh --jq` is a different, embedded implementation and does not count |
 | Node.js | ≥ 18 | Runs the hook. Without Node the hook exits quietly and **every gate is off**; `/github-workflow:doctor` says so. Claude Code's native installer does not bring Node with it |
-| `bash` | ≥ 3.2 | The scripts and the hook launcher. macOS's stock `/bin/bash` works; on Windows, Git Bash |
+| `bash` | ≥ 3.2 | The scripts. macOS's stock `/bin/bash` works; on Windows, Git Bash |
+| `/bin/sh` | any POSIX sh | Starts the hook launcher: dash, busybox ash and macOS's `/bin/sh` all work. On Windows, Git Bash provides it. The hooks set `"shell": "bash"`, so without Git for Windows Claude Code reports that Git Bash was not found and runs none of them: **every gate is off**. A bash it does not detect as Git Bash (MSYS2, Cygwin) does not count, and a system with no `/bin/sh` (Termux) cannot start the launcher |
 
 ## Quick start
 
@@ -243,13 +244,18 @@ other agents follow the protocol because their instructions say so, not because 
 ## Security
 
 The hooks run in whatever repository you open, before you approve anything, so they never run a
-program from it. The launcher and the hook find `node`, `git` and `bash` only in absolute `PATH`
-entries, and git runs with `core.fsmonitor` off.
+program from it. `hooks/hooks.json` starts the launcher as `/bin/sh` by absolute path, so Claude
+Code looks nothing up on `PATH` to start it, and every hook sets `"shell": "bash"`. On Windows,
+`/bin/sh` is then Git Bash's own `sh.exe`. Without Git Bash, Claude Code would otherwise hand a
+hook to PowerShell, which reads `/bin/sh` as `\bin\sh` on the current drive: on `C:` any local
+account can create that file. With `"shell": "bash"` it runs no hook there instead. The launcher
+and the hook find `node`, `git` and `bash` only in absolute `PATH` entries, and git runs with
+`core.fsmonitor` off.
 
-One lookup is out of the plugin's reach. `hooks/hooks.json` starts the launcher as `bash`, and
-Claude Code looks that name up on `PATH`, in the session's directory, before any plugin code runs.
-If your `PATH` has an empty or relative entry (`.`, a leading `:`, a `::`) ahead of bash's own
-directory, or anywhere on a machine without bash,
+An empty or relative `PATH` entry (`.`, a leading `:`, a `::`) is still a risk outside the plugin,
+for commands that run bash, node or git by name from the session's directory, yours and the Bash
+tool's included. If the entry comes before the real program's directory, or the program is not
+installed,
 a program planted in the working directory could run in place of bash, node or git.
 `/github-workflow:doctor` shows a `PATH  warning` row naming every empty or relative entry; remove
 them from `PATH`.
@@ -262,7 +268,7 @@ them from `PATH`.
 | A `gh issue create` without `Searched:` went through | Only adopted repositories have that gate. Run `/github-workflow:doctor` to see the mode; a `--repo` naming another repository, or a body the hook cannot read (see [Gates](#gates)), is not checked |
 | `taxonomy check  NOT RUNNING` with `not on PATH: jq` | Until it is fixed the taxonomy gate passes silently. Install `jq` ≥ 1.6. On Windows, if `jq` was installed with winget and is still not found, Claude Code inherited a `PATH` from before the install, and restarting the editor usually does not fix it: copy `jq.exe` into a directory already on `PATH`, e.g. `cp "$LOCALAPPDATA/Microsoft/WinGet/Packages/jqlang.jq_"*/jq.exe ~/bin/` when `~/bin` is on it |
 | `bash not found` or `git not found` in the self-check | The hook only runs `bash` and `git` from absolute `PATH` entries, never from the working directory or a relative entry. Put their directory on `PATH` as an absolute path |
-| `PATH  warning  relative to the working directory: …` in the self-check | `PATH` has an empty or relative entry, so a program in the repository could run in place of `bash` when Claude Code starts the hook (see [Security](#security)). Remove the named entries from `PATH` |
+| `PATH  warning  relative to the working directory: …` in the self-check | `PATH` has an empty or relative entry, so a program in the repository could run in place of `bash`, `node` or `git` for a command that runs them by name; the hook's own launch is not affected (see [Security](#security)). Remove the named entries from `PATH` |
 | `invalid issue format: "208\r"` | CRLF from the Windows `jq` build: every captured value but the last ends in a carriage return. Pipe the capture through `tr -d '\r'` |
 | `missing required scopes [read:project]` | The token cannot read Projects boards — this is **not** "no board". Run `gh auth refresh -s read:project` (or `-s project` to move cards) |
 | `Permission denied` running a script | Git on Windows does not record the executable bit. Run scripts as `bash <path>`, never `./<path>` |
@@ -289,7 +295,7 @@ Per-component (rounded)
 
 The hooks are harness-only and cost no model context; a gate's message reaches Claude only when it
 blocks, and an ask's reason is shown to you. They do cost a little time: every Bash call and every
-file edit starts the hook (bash, then Node). An edit outside an adopted checkout on its default
+file edit starts the hook (`/bin/sh`, then Node). An edit outside an adopted checkout on its default
 branch is settled by reading a few files; git runs only when it is. The ~12.4k for
 `github-workflow` is paid each time the skill loads for GitHub work, and its references are read
 only when a step needs them.
