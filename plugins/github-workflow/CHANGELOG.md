@@ -4,6 +4,45 @@ All notable changes to this plugin are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-10-05
+
+Hook edge cases, and a record of the follow-ups to the first 1.0.0 commit: the
+`github-workflow--v1.0.0` tag includes #22 and #26, but the 1.0.0 section below did not list them.
+
+### Fixed
+
+- The default-branch gate follows a branch switch in a reftable repository: in
+  `git checkout main && git commit`, whether `main` exists is asked of git
+  (`show-ref --verify`) there, as such a repository has no ref files to read (#23).
+- `GH_REPO` set earlier in the same command is followed: `export GH_REPO=…`, a bare
+  `GH_REPO=…` and `unset GH_REPO`, scoped as `cd` is. A value the shell expands leaves the
+  repository unknown, and the command is treated as guest (#25).
+- Hook follow-ups (#26): the deploy gate diffs the branch `--head` names; an edit by URL,
+  `GH_REPO` as a prefix and a preceding `cd` decide which repository's gates apply; the
+  closing gate catches `Closes: #N` and `owner/repo#N`, no longer lets a negation in an earlier
+  sentence block a real closer, and checks an inline `--body` holding `$VAR` or a backtick; gh is
+  found inside `$( )`, backticks, subshells and wrappers, and every gh create or edit in a
+  command is judged; `run-hook.sh` takes `node` from absolute `PATH` entries only; a commit, push
+  or edit on the default branch of a reftable repository asks; the git probes share a deadline
+  inside the hook timeout and run with `core.fsmonitor` off; an unexpected error exits 0.
+- Script, skill-doc and setup follow-ups (#22): `lint-issue-labels.sh --all` no longer stops at
+  500 issues; `bootstrap-labels.sh` applies a found config only to the repository it describes;
+  the skill's examples use the real default branch, quote `<skill-dir>` paths, ask before
+  self-assigning in guest mode and warn before destructive commands; setup finds existing PR
+  templates and issue forms at every path GitHub reads and checks private vulnerability
+  reporting before adding a security link.
+
+### Added
+
+- The self-check, and so `/github-workflow:doctor`, has a `PATH` row that warns about an empty or
+  relative entry: Claude Code looks up `bash` for the hook there before any plugin code runs. The
+  README gains a Security section (#24).
+- `docs/publishing.md` runs setup and doctor live before a release (#22).
+
+### Changed
+
+- The repository README is a full landing page for the marketplace (#27).
+
 ## [1.0.0] - 2026-10-04
 
 Initial release, extracted from the GitHub workflow of a production repository and generalized.

@@ -270,7 +270,7 @@ a program planted in the working directory could run in place of bash, node or g
 ## Token cost
 
 Measured with `claude --plugin-dir plugins/github-workflow plugin details github-workflow` on
-Claude Code 2.1.289, plugin 1.0.0:
+Claude Code 2.1.289, plugin 1.0.1:
 
 ```text
 Projected token cost
@@ -278,21 +278,21 @@ Projected token cost
 
 Per-component (rounded)
   component        always-on  on-invoke
-  doctor                 ~70      ~1.4k
-  github-workflow       ~130     ~11.8k
-  setup                  ~80        ~3k
+  doctor                 ~70      ~2.5k
+  github-workflow       ~130     ~12.4k
+  setup                  ~80      ~4.4k
 ```
 
 The hooks are harness-only and cost no model context; a gate's message reaches Claude only when it
 blocks, and an ask's reason is shown to you. They do cost a little time: every Bash call and every
 file edit starts the hook (bash, then Node). An edit outside an adopted checkout on its default
-branch is settled by reading a few files; git runs only when it is. The ~11.8k for
+branch is settled by reading a few files; git runs only when it is. The ~12.4k for
 `github-workflow` is paid each time the skill loads for GitHub work, and its references are read
 only when a step needs them.
 
 `plugin details` counts all three skill descriptions as always-on. `setup` and `doctor` are
 user-only, though (`disable-model-invocation: true`): Claude cannot invoke them, and their bodies
-(~3k and ~1.4k) load only when you type the command. Claude Code's skills documentation says a
+(~4.4k and ~2.5k) load only when you type the command. Claude Code's skills documentation says a
 user-only skill's description is not in the model's context either, so ~275 is an upper bound and
 the primary skill's ~130 is what every session carries. All figures are estimates.
 

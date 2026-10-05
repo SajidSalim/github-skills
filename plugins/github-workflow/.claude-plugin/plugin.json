@@ -1,7 +1,7 @@
 {
   "name": "github-workflow",
   "displayName": "GitHub Workflow",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A disciplined issue-to-PR workflow for coding agents on GitHub: search for duplicates before filing, claim via the comment thread, branch and PR without merging, label to a strict taxonomy, and close with a written record — with opt-in hooks that enforce it.",
   "author": { "name": "SajidSalim", "url": "https://github.com/SajidSalim" },
   "homepage": "https://github.com/SajidSalim/github-skills/tree/main/plugins/github-workflow",
