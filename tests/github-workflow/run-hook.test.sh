@@ -58,6 +58,16 @@ test_hooks_json_wires_the_edit_tools_to_the_same_hook() {
   jq -e '.hooks.PreToolUse[1].hooks[0].timeout == 15' "$f" >/dev/null
 }
 
+# Without "shell": "bash", Claude Code on Windows without Git Bash hands the string to PowerShell,
+# which reads /bin/sh as <drive>:\bin\sh and runs whatever sits there. With it, the host reports
+# that Git Bash is missing and runs nothing.
+test_hooks_json_keeps_every_hook_off_powershell() {
+  local n
+  n=$(jq '[.. | objects | select(.type? == "command") | select(.shell != "bash")] | length' \
+        "$PLUGIN_ROOT/hooks/hooks.json" | tr -d '\r')
+  assert_eq 0 "$n" "every command hook sets \"shell\": \"bash\""
+}
+
 test_with_node_an_ask_comes_through_on_stdout_with_exit_0() {
   _need_node || return 0
   command -v git >/dev/null 2>&1 || { echo "skipped: git not on PATH"; return 0; }
