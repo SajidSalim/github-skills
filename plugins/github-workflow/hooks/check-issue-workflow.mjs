@@ -923,14 +923,15 @@ const somePaths = (label, words, fromIndex = false) => ({
  * it touches (none: the whole tree), `unknown` that the shell expands one of them, and `kinds`
  * which `git status` entries it destroys -- tracked changes, untracked files, ignored files.
  * `git stash drop|clear` is `{ label, stash: true, ref }`, and `git worktree remove -f`
- * `{ label, worktree, unknown }`.
+ * `{ label, worktree, unknown }`. `probe` lets a reftable repository's branches be asked of git
+ * (branchExists).
  */
-export function discardForm(g) {
+export function discardForm(g, probe = {}) {
   if (!g || g.moves) return null;
   const words = g.args.map((v, i) => ({ v, expands: Boolean(g.expands?.[i]) }));
   switch (g.sub) {
     case "checkout":
-      return checkoutForm(words, g.dir);
+      return checkoutForm(words, g.dir, probe);
     case "restore":
       return restoreForm(words);
     case "reset": {
@@ -955,7 +956,7 @@ export function discardForm(g) {
  * without `--`, `.` or an argument that is an existing path -- unless -b, -B or --orphan make it
  * a new branch. A plain `git checkout feature` switches branches and is not a discard.
  */
-function checkoutForm(words, dir) {
+function checkoutForm(words, dir, probe) {
   const dd = words.findIndex((w) => w.v === "--");
   const opts = dd === -1 ? words : words.slice(0, dd);
   let force = false;
@@ -991,8 +992,10 @@ function checkoutForm(words, dir) {
   if (force) return wholeTree("checkout");
   if (creates) return null;
   // git reads a first argument that names a branch as the branch, even when a path shares its name.
-  const gitDir = dir === null ? null : checkoutAt(dir)?.gitDir;
-  const tree = positional[0] && !positional[0].expands && gitDir && branchExists(gitDir, positional[0].v);
+  const checkout = dir === null ? null : checkoutAt(dir);
+  const tree =
+    positional[0] && !positional[0].expands && checkout &&
+    branchExists(checkout.gitDir, positional[0].v, { ...probe, root: checkout.root });
   const rest = tree ? positional.slice(1) : positional;
   const paths = rest.filter((w) => w.v === "." || (!w.expands && dir !== null && pathExists(dir, w.v)));
   if (paths.length === 0) return null;
@@ -1693,13 +1696,57 @@ function commonDir(gitDir) {
 }
 
 /**
- * Whether `name` is a local branch, or one `git checkout <name>` would create from origin's, read
- * from files: a loose ref or a `packed-refs` line. No spawn.
+ * Whether the repository whose common directory is `common` keeps its refs in a reftable
+ * (`extensions.refStorage = reftable` in its config), where there are no ref files to read.
  */
-export function branchExists(gitDir, name) {
+function usesReftable(common) {
+  let text;
+  try {
+    text = readFileSync(join(common, "config"), "utf8");
+  } catch {
+    return false;
+  }
+  let section = "";
+  let storage = "";
+  for (let line of text.split(/\r?\n/)) {
+    line = line.trim();
+    const header = /^\[([^\]]*)\](.*)$/.exec(line);
+    if (header) {
+      section = header[1].trim().toLowerCase();
+      line = header[2].trim(); // `[extensions] refStorage = reftable` on one line
+    }
+    const m = section === "extensions" && /^refstorage\s*=\s*"?([A-Za-z]+)"?\s*(?:[#;].*)?$/i.exec(line);
+    if (m) storage = m[1].toLowerCase(); // the last one wins, as in git
+  }
+  return storage === "reftable";
+}
+
+/**
+ * Whether `name` is a local branch, or one `git checkout <name>` would create from origin's. The
+ * files backend is read from disk -- a loose ref or a `packed-refs` line -- with no spawn. A
+ * reftable repository has no ref files, so there git answers (`show-ref --verify`), when `probe`
+ * gives it: `{ git, root, time }`, `git` resolving the executable, `root` the checkout to run in,
+ * `time` the shared deadline. Without git, or past the deadline, the answer is no: the branch is
+ * not known, which passes.
+ */
+export function branchExists(gitDir, name, probe = {}) {
   if (!name || name.startsWith("-") || /(^|\/)\.\.?($|\/)|[\0\\]/.test(name)) return false;
   const common = commonDir(gitDir);
   const refs = [`refs/heads/${name}`, `refs/remotes/origin/${name}`];
+  if (usesReftable(common)) {
+    const { git, root, time = budget } = probe;
+    const exe = git && root && !time.spent() ? git() : null;
+    if (!exe) return false;
+    return refs.some((ref) => {
+      if (time.spent()) return false;
+      const run = spawnSync(exe, [...SAFE_GIT, "show-ref", "--verify", "--quiet", ref], {
+        cwd: root,
+        encoding: "utf8",
+        timeout: time.timeout(),
+      });
+      return !run.error && run.status === 0;
+    });
+  }
   const isFile = (p) => {
     try {
       return statSync(p).isFile();
@@ -2165,16 +2212,18 @@ export function gitAsk(command, cwd, payload = {}, env = process.env, time = bud
   const branchOf = (checkout) =>
     movedSomewhere ? null : moved.has(checkout.root) ? moved.get(checkout.root) : checkoutBranch(checkout, git, time);
 
+  // A reftable repository has no ref files: whether a branch exists is asked of git.
+  const probe = { git, time };
   for (const g of cmds) {
     if (g.moves) {
       moveTo(g.dir, null);
       continue;
     }
-    const form = discardForm(g);
+    const form = discardForm(g, probe);
     const reason =
       (form && discardAsk(git, g, form, who, cwd, env, time)) || branchAsk(g, branchOf, who, defaultsOf);
     if (reason) return reason;
-    const target = switchTarget(g, form);
+    const target = switchTarget(g, form, probe);
     if (target !== undefined) moveTo(g.dir, target);
   }
   return null;
@@ -2185,7 +2234,7 @@ export function gitAsk(command, cwd, payload = {}, env = process.env, time = bud
  * or the branch it names; null when that is not a known branch (--detach, `-`, a commit-ish, an
  * expansion); undefined when HEAD does not move (a path checkout, no target).
  */
-function switchTarget(g, form) {
+function switchTarget(g, form, probe) {
   if (g.sub !== "checkout" && g.sub !== "switch") return undefined;
   if (g.sub === "checkout" && form?.paths?.length) return undefined;
   const create = g.sub === "checkout" ? "bB" : "cC";
@@ -2211,8 +2260,8 @@ function switchTarget(g, form) {
   if (positional.length === 0) return undefined;
   const k = positional[0];
   if (g.expands?.[k]) return null;
-  const gitDir = g.dir === null ? null : checkoutAt(g.dir)?.gitDir;
-  return gitDir && branchExists(gitDir, g.args[k]) ? g.args[k] : null;
+  const checkout = g.dir === null ? null : checkoutAt(g.dir);
+  return checkout && branchExists(checkout.gitDir, g.args[k], { ...probe, root: checkout.root }) ? g.args[k] : null;
 }
 
 // Flags under which a commit-adding subcommand adds no commit of its own.

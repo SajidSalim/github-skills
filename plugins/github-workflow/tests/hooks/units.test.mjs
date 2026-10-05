@@ -1482,4 +1482,42 @@ describe("branchExists", () => {
     assert.equal(branchExists(git, "lib"), false);
     assert.equal(branchExists(git, "../x"), false);
   });
+
+  test("the files backend is read from disk; git never runs", () => {
+    const git = temp("refs");
+    mkdirSync(join(git, "refs", "heads"), { recursive: true });
+    writeFileSync(join(git, "refs", "heads", "main"), "0\n");
+    writeFileSync(join(git, "config"), "[core]\n\trepositoryformatversion = 1\n[extensions]\n\tobjectFormat = sha1\n");
+    const probe = { git: () => assert.fail("git must not run"), root: git };
+    assert.equal(branchExists(git, "main", probe), true);
+    assert.equal(branchExists(git, "other", probe), false);
+  });
+
+  // `git init --ref-format=reftable` needs git 2.45 or later.
+  const reftableSkip = !gitAvailable
+    ? "git not found"
+    : spawnSync("git", ["init", "-q", "--ref-format=reftable", temp("probe")]).status === 0
+      ? false
+      : `${spawnSync("git", ["--version"], { encoding: "utf8" }).stdout.trim()} cannot create a reftable repository (needs git 2.45 or later)`;
+
+  test("a reftable repository has no ref files: git show-ref answers", { skip: reftableSkip }, () => {
+    const d = temp("reftable");
+    const run = (...args) => spawnSync("git", args, { cwd: d, encoding: "utf8" });
+    run("init", "-q", "--ref-format=reftable", "-b", "main");
+    run("-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false",
+      "commit", "-q", "--allow-empty", "--no-verify", "-m", "seed");
+    run("branch", "feat/x");
+    run("update-ref", "refs/remotes/origin/remote-only", "HEAD");
+    const gitDir = join(d, ".git");
+    const probe = { git: () => resolveExecutable("git"), root: d };
+
+    assert.equal(branchExists(gitDir, "main", probe), true);
+    assert.equal(branchExists(gitDir, "feat/x", probe), true);
+    assert.equal(branchExists(gitDir, "remote-only", probe), true);
+    assert.equal(branchExists(gitDir, "feat", probe), false);
+    assert.equal(branchExists(gitDir, "-h", probe), false);
+    assert.equal(branchExists(gitDir, "main"), false, "no git: unknown, which passes");
+    assert.equal(branchExists(gitDir, "main", { ...probe, git: () => null }), false);
+    assert.equal(branchExists(gitDir, "main", { ...probe, time: makeBudget(0) }), false, "past the deadline");
+  });
 });

@@ -1501,11 +1501,15 @@ describe("PreToolUse — branch gate, edits", { skip: !gitAvailable }, () => {
 });
 
 // A reftable repository's .git/HEAD always reads `ref: refs/heads/.invalid`; the branch is in the
-// reftable, so only git can say. reftable is planned as git 3.0's default.
-const reftableAvailable =
-  gitAvailable && gitIn(temp("reftable-probe"), "init", "-q", "--ref-format=reftable").status === 0;
+// reftable, so only git can say. reftable is planned as git 3.0's default. `git init
+// --ref-format=reftable` needs git 2.45 or later; an older git skips these tests, saying why.
+const reftableSkip = !gitAvailable
+  ? "git not found"
+  : gitIn(temp("reftable-probe"), "init", "-q", "--ref-format=reftable").status === 0
+    ? false
+    : `${gitIn(tmpdir(), "--version").stdout.trim()} cannot create a reftable repository (needs git 2.45 or later)`;
 
-describe("PreToolUse — branch gate, reftable", { skip: !reftableAvailable }, () => {
+describe("PreToolUse — branch gate, reftable", { skip: reftableSkip }, () => {
   const reftableRepo = () => {
     const dir = temp("reftable");
     gitIn(dir, "init", "-q", "--ref-format=reftable", "-b", "main");
@@ -1536,6 +1540,23 @@ describe("PreToolUse — branch gate, reftable", { skip: !reftableAvailable }, (
     const dir = reftableRepo();
     gitIn(dir, "checkout", "-q", "-b", "feature");
     passes(runHook(pre("git commit -m x", dir)));
+  });
+
+  // A reftable repository has no loose ref files to read, so git is asked whether `main` exists.
+  test("switching to main earlier in the same command is followed", () => {
+    const dir = reftableRepo();
+    gitIn(dir, "checkout", "-q", "-b", "feature");
+    assert.match(askOf(runHook(pre("git checkout main && git commit -m x", dir))), /run git commit on main/);
+    assert.match(askOf(runHook(pre("git switch main && git push", dir))), /push to main/);
+    passes(runHook(pre("git checkout -b fix/x && git commit -m x", dir)));
+    passes(runHook(pre("git checkout nope && git commit -m x", dir)));
+  });
+
+  test("a branch that shares its name with a directory is a branch switch, not a discard", () => {
+    const dir = reftableRepo();
+    gitIn(dir, "branch", "lib");
+    write(dir, "lib/a.txt");
+    passes(runHook(pre("git checkout lib", dir)));
   });
 });
 
