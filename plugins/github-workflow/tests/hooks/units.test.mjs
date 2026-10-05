@@ -351,6 +351,18 @@ describe("findGhTargets — GH_REPO set earlier in the command", () => {
     assert.equal(repoOf(`unset -f GH_REPO; gh issue create -b x`), null);
   });
 
+  test("declare and typeset as export does; +x clears; a nameref or an append is unknown", () => {
+    assert.equal(repoOf(`declare -x GH_REPO=o/r; gh issue create -b x`), "o/r");
+    assert.equal(repoOf(`typeset -gx GH_REPO=o/r; gh issue create -b x`), "o/r");
+    assert.equal(repoOf(`declare GH_REPO=o/r; gh issue create -b x`), "o/r", "as a bare assignment");
+    assert.equal(repoOf(`export GH_REPO=o/r; declare +x GH_REPO; gh issue create -b x`), "");
+    assert.equal(repoOf(`declare -f GH_REPO; gh issue create -b x`), null);
+    assert.equal(unknown(`declare -n GH_REPO=OTHER; gh issue create -b x`), true);
+    assert.equal(unknown(`GH_REPO+=/x; gh issue create -b x`), true);
+    assert.equal(unknown(`export GH_REPO+=/x; gh issue create -b x`), true);
+    assert.equal(unknown(`A+=1; gh issue create -b x`), false);
+  });
+
   test("scoped like cd: a subshell's is undone, a command substitution inherits", () => {
     assert.equal(repoOf(`(export GH_REPO=o/r) && gh issue create -b x`), null);
     assert.equal(repoOf(`(export GH_REPO=o/r && gh issue create -b x)`), "o/r");

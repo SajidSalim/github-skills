@@ -104,9 +104,11 @@ The config is read from the root of the git repository the command runs in, afte
 `gh` in the same command, so commands run from a subdirectory are covered. A `gh … --repo X` command gets the repository gates only when `X` is the configured
 repository (URL and `HOST/OWNER/REPO` forms and any case match). An edit target given by URL, and
 `GH_REPO`, name the repository the same way. `GH_REPO` counts from the environment, as a prefix on
-`gh`, or set earlier in the same command with `export GH_REPO=…` or `GH_REPO=…` (and cleared with
-`unset GH_REPO`), scoped as `cd` is. When the shell expands its value, the repository cannot be known
-and the command is treated as guest.
+`gh`, or set earlier in the same command with `export GH_REPO=…`, `declare -x GH_REPO=…` or
+`GH_REPO=…` (and cleared with `unset GH_REPO`), scoped as `cd` is. When the shell expands its value,
+the repository cannot be known and the command is treated as guest, unless `--repo` or an edit URL
+names it. Not followed: `source`, `eval`, `set -a`, `readonly`, `local`, or an export in a
+pipeline, in the background or behind `&&`/`||`, which is counted as if it ran.
 
 ## Gates
 

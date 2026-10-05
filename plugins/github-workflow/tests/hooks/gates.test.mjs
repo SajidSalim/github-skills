@@ -953,6 +953,21 @@ describe("--repo", () => {
     assert.equal(runHook(pre(`GH_REPO=acme/other true; ${create}`, dir)).status, 2, "a prefix is that command's alone");
   });
 
+  test("declare -x GH_REPO counts as export does", () => {
+    const dir = repoDir(ADOPTED);
+    assert.equal(runHook(pre(`declare -x GH_REPO=acme/other; gh issue create --title x --body plain`, dir)).status, 0);
+  });
+
+  // gh repo view, which the linter uses, honours GH_REPO: once the command clears it, so must the linter.
+  test("after unset GH_REPO, the linter does not inherit the cleared GH_REPO", { skip: !bashAvailable }, () => {
+    const dir = repoDir(ADOPTED);
+    runHook(post(`unset GH_REPO; gh issue edit 42 --add-label type:chore`, "", dir), {
+      hook: pluginTree('printf "%s|%s" "${GH_REPO-unset}" "$*" > args.txt\nexit 0\n'),
+      env: { GH_REPO: "acme/other" },
+    });
+    assert.equal(readFileSync(join(dir, "args.txt"), "utf8"), "unset|42");
+  });
+
   test("unset GH_REPO clears it, an inherited one too", () => {
     const dir = repoDir(ADOPTED);
     const create = `gh issue create --title x --body plain`;

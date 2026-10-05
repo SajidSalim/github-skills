@@ -653,41 +653,58 @@ function shellAt(text, from, to, at, dir, repo) {
   return { dir, depth: saved.length, repo };
 }
 
-const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s;
+// `NAME=value`, or `NAME+=value`, which appends.
+const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)(\+?)=(.*)$/s;
+
+// The builtins that set, export or clear a variable by name.
+const DECLARERS = new Set(["export", "unset", "declare", "typeset"]);
 
 /**
  * GH_REPO once the simple command `words` has run, from `repo` before it. A state is undefined
  * (the command string has not touched it: the environment's applies), `{ value }` ("" when
- * cleared) or `{ unknown: true }` (the shell expands the value, or a word that could name it).
+ * cleared) or `{ unknown: true }` (the shell expands the value, appends to it, or a word could
+ * name it).
  *
- * `export GH_REPO=x` and a command of bare assignments, `GH_REPO=x`, set it; `unset GH_REPO` and
- * `export -n GH_REPO` clear it. A bare assignment reaches gh only when GH_REPO is already
- * exported, which the hook cannot see; counting it is the guest side, which fails open. A prefix,
- * `GH_REPO=x cmd`, is that command's alone and changes nothing after it.
+ * `export GH_REPO=x`, `declare`/`typeset` with an assignment, and a command of bare assignments,
+ * `GH_REPO=x`, set it; `unset GH_REPO`, `export -n GH_REPO` and `declare +x GH_REPO` clear it. A
+ * bare or undeclared assignment reaches gh only when GH_REPO is already exported, which the hook
+ * cannot see; counting it is the guest side, which fails open. A prefix, `GH_REPO=x cmd`, is that
+ * command's alone and changes nothing after it.
+ *
+ * Not followed: `source`, `eval`, `set -a`, `readonly`, `local`, and an export in a pipeline, in
+ * the background or behind `&&`/`||` -- each is taken as the cd tracking takes it.
  */
 function ghRepoAfter(words, repo) {
   if (words.length === 0) return repo;
-  const assigned = (w) => (w.expands ? { unknown: true } : { value: ASSIGNMENT.exec(w.v)[2].trim() });
+  const assigned = (w) => {
+    const m = ASSIGNMENT.exec(w.v);
+    return w.expands || m[2] ? { unknown: true } : { value: m[3].trim() };
+  };
   if (words.every((w) => ASSIGNMENT.test(w.v))) {
     for (const w of words) if (ASSIGNMENT.exec(w.v)[1] === "GH_REPO") repo = assigned(w);
     return repo;
   }
   const head = words[0].v;
-  if (head !== "export" && head !== "unset") return repo;
+  if (!DECLARERS.has(head)) return repo;
+  const declares = head === "declare" || head === "typeset";
   let clear = head === "unset";
+  let nameref = false;
   let k = 1;
-  for (; k < words.length && /^-/.test(words[k].v) && !words[k].expands; k++) {
-    if (words[k].v === "--") {
+  for (; k < words.length && /^[-+]/.test(words[k].v) && !words[k].expands; k++) {
+    const flag = words[k].v;
+    if (flag === "--") {
       k++;
       break;
     }
-    if (words[k].v.includes("f")) return repo; // functions, not variables
-    if (head === "export" && words[k].v.includes("n")) clear = true;
+    if (/[fF]/.test(flag)) return repo; // functions, not variables
+    if (head === "export" && flag.startsWith("-") && flag.includes("n")) clear = true;
+    if (declares && flag.startsWith("+") && flag.includes("x")) clear = true;
+    if (declares && flag.startsWith("-") && flag.includes("n")) nameref = true;
   }
   for (const w of words.slice(k)) {
     const m = ASSIGNMENT.exec(w.v);
     const name = m ? m[1] : w.v;
-    if (name === "GH_REPO") repo = clear ? { value: "" } : m ? assigned(w) : repo;
+    if (name === "GH_REPO") repo = nameref ? { unknown: true } : clear ? { value: "" } : m ? assigned(w) : repo;
     else if (w.expands && !m) repo = { unknown: true }; // `export $(cat .env)`, `unset $V`
   }
   return repo;
@@ -2445,7 +2462,7 @@ function lossOf(git, dir, form, time = budget) {
   return { where, lost };
 }
 
-function postToolUse({ kind, action, args, cwd, adopted, gates, payload, repo }) {
+function postToolUse({ kind, action, args, cwd, adopted, gates, payload, repo, envRepo }) {
   if (!adopted || gates.labelTaxonomy === false) return;
 
   const n = issueNumber(action, args, stdoutOf(payload), kind);
@@ -2453,7 +2470,13 @@ function postToolUse({ kind, action, args, cwd, adopted, gates, payload, repo })
   if (!n || !bash || !existsSync(LINTER)) return;
 
   const argv = [slash(LINTER), n, ...(kind === "pr" ? ["--pr"] : []), ...(repo ? ["--repo", repo] : [])];
-  const run = spawnSync(bash, argv, { cwd, encoding: "utf8", timeout: 40_000, env: absolutePathEnv() });
+  const env = absolutePathEnv();
+  // The command cleared GH_REPO before gh ran (`unset GH_REPO`): gh used the checkout's repository,
+  // and the linter's `gh repo view` must not pick up the one the hook inherited.
+  if (envRepo === "") {
+    for (const k of Object.keys(env)) if (k.toUpperCase() === "GH_REPO") delete env[k];
+  }
+  const run = spawnSync(bash, argv, { cwd, encoding: "utf8", timeout: 40_000, env });
 
   if (run.error || run.status === null || run.status === 0) return;
 
