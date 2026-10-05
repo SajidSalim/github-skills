@@ -424,6 +424,19 @@ describe("PostToolUse — taxonomy", () => {
     assert.equal(r.status, 0);
   });
 
+  // The linter runs gh and jq by bare name in the user's repository: no relative PATH entry.
+  test("the linter's PATH holds no empty or relative entry", { skip: !bashAvailable }, () => {
+    const sep = process.platform === "win32" ? ";" : ":";
+    const key = Object.keys(process.env).find((k) => /^path$/i.test(k)) ?? "PATH";
+    runHook(post(`gh issue edit 42 --add-label area:ci`, "", dir), {
+      hook: stubbed('printf "%s" "$PATH" > path.txt\nexit 0\n'),
+      env: { [key]: `${process.env[key]}${sep}planted-relative-dir${sep}` },
+    });
+    const path = readFileSync(join(dir, "path.txt"), "utf8");
+    assert.notEqual(path, "");
+    assert.doesNotMatch(path, /planted-relative-dir/);
+  });
+
   test("forwards --repo through to the linter", { skip: !bashAvailable }, () => {
     runHook(post(`gh issue edit 42 --repo acme/shop --add-label area:ci`, "", dir), {
       hook: stubbed('printf "%s" "$*" > args.txt\nexit 0\n'),
@@ -1147,6 +1160,18 @@ describe("PreToolUse — discard gate", { skip: !gitAvailable }, () => {
     assert.match(why, /^github-workflow: Claude wants to run git checkout, which discards uncommitted changes in /);
     assert.match(why, /: lib\/a\.txt\. They may not be its own\. Approve only if you want them gone\.$/);
     assert.doesNotMatch(why, NO_OFF_SWITCH);
+  });
+
+  // The hook's own clock starts its git deadline: a preload makes every Date.now() 20 s later than
+  // the last, so the budget main starts is spent before the first probe, and the ask carries the
+  // command alone.
+  test("once the hook's deadline has passed, the ask carries the command alone", () => {
+    const dir = gitRepo();
+    write(dir, "lib/a.txt");
+    const clock = "data:text/javascript,globalThis.n=0;globalThis.r=Date.now;Date.now=()=>r()+(n++)*2e4;";
+    const why = askOf(runHook(pre("git checkout -- lib", dir), { env: { NODE_OPTIONS: `--import=${clock}` } }));
+    assert.match(why, /and the hook could not tell which/);
+    assert.doesNotMatch(why, /lib\/a\.txt/);
   });
 
   test("git checkout -- lib passes when lib/ is clean", () => {
