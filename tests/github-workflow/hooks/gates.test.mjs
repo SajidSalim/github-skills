@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const HOOK = fileURLToPath(new URL("../../hooks/check-issue-workflow.mjs", import.meta.url));
+const HOOK = fileURLToPath(new URL("../../../plugins/github-workflow/hooks/check-issue-workflow.mjs", import.meta.url));
 
 const temps = [];
 const temp = (prefix) => {

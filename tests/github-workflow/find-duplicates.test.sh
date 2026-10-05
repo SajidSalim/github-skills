@@ -5,7 +5,7 @@
 #   - a failed query rendered as zero candidates
 #   - a jq version that rejected the classifier, swallowed into "No candidates. File it"
 
-_GOLDEN="$PLUGIN_ROOT/tests/__fixtures__/find-duplicates.golden.txt"
+_GOLDEN="$TESTS_DIR/__fixtures__/find-duplicates.golden.txt"
 _TITLE="Checkout returns 500 when the coupon code is blank"
 
 _OPEN='{"number":88,"title":"Checkout 500 on blank coupon_code","state":"OPEN","stateReason":"","labels":["type:bug"]}'

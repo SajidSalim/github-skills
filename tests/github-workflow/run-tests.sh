@@ -8,9 +8,9 @@
 # Invoke via `bash`, not `./` — git does not record the executable bit on Windows
 # checkouts (core.filemode=false).
 #
-#   bash plugins/github-workflow/tests/run-tests.sh
-#   bash plugins/github-workflow/tests/run-tests.sh --filter doc-links   # substring of file or test
-#   bash plugins/github-workflow/tests/run-tests.sh --verbose            # show passing output too
+#   bash tests/github-workflow/run-tests.sh
+#   bash tests/github-workflow/run-tests.sh --filter doc-links   # substring of file or test
+#   bash tests/github-workflow/run-tests.sh --verbose            # show passing output too
 #
 # A test file defines `test_*` functions and NOTHING at top level: the runner sources it
 # to enumerate them, so top-level work would run twice and leak between files.
@@ -22,10 +22,11 @@
 set -uo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-PLUGIN_ROOT=$(cd "$HERE/.." && pwd)
-REPO_ROOT=$(cd "$PLUGIN_ROOT/../.." && pwd)
+REPO_ROOT=$(cd "$HERE/../.." && pwd)
+PLUGIN_ROOT="$REPO_ROOT/plugins/github-workflow"
 SCRIPTS="$PLUGIN_ROOT/skills/github-workflow/scripts"
-export PLUGIN_ROOT REPO_ROOT SCRIPTS
+TESTS_DIR="$HERE"
+export PLUGIN_ROOT REPO_ROOT SCRIPTS TESTS_DIR
 
 FILTER=""
 VERBOSE=false

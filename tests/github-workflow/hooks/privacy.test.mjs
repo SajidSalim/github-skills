@@ -5,7 +5,8 @@
  *
  * Every line is lower-cased and split into `[a-z0-9_]+` tokens; each token, and each pair of
  * adjacent tokens joined by one space, is hashed and looked up. The targets are the scrub test's:
- * everything under the plugin except eval results, plus the marketplace README and manifest.
+ * everything under the plugin except eval results, the plugin's tests, plus the marketplace README
+ * and manifest.
  */
 
 import { test, after } from "node:test";
@@ -16,8 +17,9 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const PLUGIN_ROOT = fileURLToPath(new URL("../../", import.meta.url));
-const REPO_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
+const PLUGIN_ROOT = fileURLToPath(new URL("../../../plugins/github-workflow/", import.meta.url));
+const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
+const TESTS_ROOT = fileURLToPath(new URL("../", import.meta.url));
 
 /** SHA-256 (hex) of the seven source-repository terms, lower-cased. */
 const PRIVATE = new Set([
@@ -80,7 +82,7 @@ function walk(dir) {
 
 function targets() {
   const extra = [join(REPO_ROOT, "README.md"), join(REPO_ROOT, ".claude-plugin", "marketplace.json")];
-  return [...walk(PLUGIN_ROOT), ...extra.filter((f) => existsSync(f))].sort();
+  return [...walk(PLUGIN_ROOT), ...walk(TESTS_ROOT), ...extra.filter((f) => existsSync(f))].sort();
 }
 
 test("no identifier from the source repository ships", () => {

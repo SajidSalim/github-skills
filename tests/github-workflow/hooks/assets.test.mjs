@@ -6,10 +6,10 @@ import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseConfig, missingMarkers } from "../../hooks/check-issue-workflow.mjs";
+import { parseConfig, missingMarkers } from "../../../plugins/github-workflow/hooks/check-issue-workflow.mjs";
 
-const HOOK = fileURLToPath(new URL("../../hooks/check-issue-workflow.mjs", import.meta.url));
-const read = (rel) => readFileSync(new URL(`../../skills/github-workflow/${rel}`, import.meta.url), "utf8");
+const HOOK = fileURLToPath(new URL("../../../plugins/github-workflow/hooks/check-issue-workflow.mjs", import.meta.url));
+const read = (rel) => readFileSync(new URL(`../../../plugins/github-workflow/skills/github-workflow/${rel}`, import.meta.url), "utf8");
 
 const temps = [];
 after(() => { for (const d of temps) rmSync(d, { recursive: true, force: true }); });

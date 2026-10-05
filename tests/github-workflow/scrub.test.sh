@@ -14,7 +14,7 @@
 _SCRUB='\bPVT_[A-Za-z0-9_]+|\bFR-[A-Z]{3}-[0-9]+\b|\bBRD\b|\bmix (precommit|assets\.build|ash\.codegen|scripts\.test|hooks\.test)\b|#(399|276|272|213|209|211|217|218|219|220|233|235|242|245|221|238|293|318|339|447|463|208)\b'
 
 _targets() {
-  find "$PLUGIN_ROOT" -type f ! -path '*/tests/scrub.test.sh' ! -path '*/evals/results/*' | sort
+  find "$PLUGIN_ROOT" "$TESTS_DIR" -type f ! -path '*/github-workflow/scrub.test.sh' ! -path '*/evals/results/*' | sort
   local f
   for f in "$REPO_ROOT/README.md" "$REPO_ROOT/.claude-plugin/marketplace.json"; do
     [[ -f "$f" ]] && echo "$f"
