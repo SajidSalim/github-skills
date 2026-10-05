@@ -31,9 +31,9 @@ jobs:
           fi
           jq --version
       - name: Bash suite
-        run: bash plugins/github-workflow/tests/run-tests.sh
+        run: bash tests/github-workflow/run-tests.sh
       - name: Node suite
-        run: node --test plugins/github-workflow/tests/hooks/*.test.mjs
+        run: node --test tests/github-workflow/hooks/*.test.mjs
 
   bash32:
     name: scripts under macOS /bin/bash 3.2
@@ -49,7 +49,7 @@ jobs:
         run: |
           bash --version | head -1
           for s in lint-issue-labels find-duplicates bootstrap-labels run-hook portability; do
-            bash plugins/github-workflow/tests/run-tests.sh --filter "$s"
+            bash tests/github-workflow/run-tests.sh --filter "$s"
           done
 
   shellcheck:

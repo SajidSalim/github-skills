@@ -1,6 +1,6 @@
 /**
  * Unit tests for the pure layer of check-issue-workflow.mjs: command parsing, body checks,
- * repo config and mode, deploy globs. Run: node --test plugins/github-workflow/tests/hooks/*.test.mjs
+ * repo config and mode, deploy globs. Run: node --test tests/github-workflow/hooks/*.test.mjs
  * The hook's behaviour as a process -- its exit codes -- is tested in gates.test.mjs.
  */
 
@@ -19,7 +19,7 @@ import {
   resolveExecutable, heredocBodies, bodySources, nativePath,
   gitCommands, discardForm, pushTargets, discardOptionOff, discardGateEnabled, checkoutAt, headBranch,
   defaultCandidates, branchExists, selfCheck, ghRepo, absolutePathEnv, checkoutBranch, makeBudget, gitAsk,
-} from "../../hooks/check-issue-workflow.mjs";
+} from "../../../plugins/github-workflow/hooks/check-issue-workflow.mjs";
 
 const temps = [];
 const temp = (prefix) => {

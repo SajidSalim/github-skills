@@ -305,8 +305,8 @@ the primary skill's ~130 is what every session carries. All figures are estimate
 From a clone of the marketplace repository:
 
 ```bash
-bash plugins/github-workflow/tests/run-tests.sh                 # bash + jq only; gh is stubbed
-node --test plugins/github-workflow/tests/hooks/*.test.mjs      # Node >= 20
+bash tests/github-workflow/run-tests.sh                 # bash + jq only; gh is stubbed
+node --test tests/github-workflow/hooks/*.test.mjs      # Node >= 20
 claude plugin validate plugins/github-workflow --strict
 ```
 

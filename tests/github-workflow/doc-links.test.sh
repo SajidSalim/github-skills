@@ -4,7 +4,7 @@
 # workflow is split across a skill and seven references; the split only works if the pointers
 # land. A dead pointer silently returns an agent to guessing.
 
-_check() { run_cmd bash "$PLUGIN_ROOT/tests/lib/check-doc-links.sh" "$@"; }
+_check() { run_cmd bash "$TESTS_DIR/lib/check-doc-links.sh" "$@"; }
 
 test_a_resolving_relative_link_passes() {
   write_file "$TEST_TMP/docs/guide.md" <<<"# guide"

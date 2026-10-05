@@ -359,15 +359,16 @@ plugins/github-workflow/
   hooks/                            the gates: a zero-dependency Node hook and its launcher
   skills/github-workflow/           the protocol, references, templates and scripts
   skills/setup/, skills/doctor/     the two commands
-  tests/                            bash tests (gh stubbed) and Node tests for the hook
   evals/                            the model-behaviour eval suite
+tests/github-workflow/              bash tests (gh stubbed) and Node tests for the hook; kept
+                                    outside the plugin so installs don't carry them
 ```
 
 Run the tests:
 
 ```bash
-bash plugins/github-workflow/tests/run-tests.sh
-node --test plugins/github-workflow/tests/hooks/*.test.mjs
+bash tests/github-workflow/run-tests.sh
+node --test tests/github-workflow/hooks/*.test.mjs
 claude plugin validate plugins/github-workflow --strict && claude plugin validate . --strict
 ```
 
