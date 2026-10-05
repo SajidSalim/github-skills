@@ -51,6 +51,29 @@ jobs:
           for s in lint-issue-labels find-duplicates bootstrap-labels run-hook portability; do
             bash tests/github-workflow/run-tests.sh --filter "$s"
           done
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: hooks.json launch through macOS /bin/sh
+        run: node --test tests/github-workflow/hooks/launch.test.mjs
+
+  nobash:
+    name: hooks.json launch with no bash (Alpine, busybox sh)
+    runs-on: ubuntu-latest
+    container: node:20-alpine
+    defaults:
+      run:
+        shell: sh
+    steps:
+      - name: Install git
+        run: apk add --no-cache git
+      - uses: actions/checkout@v4
+      - name: Confirm there is no bash
+        run: |
+          ls -l /bin/sh
+          if command -v bash; then echo "bash is installed; this job must run without it" >&2; exit 1; fi
+      - name: hooks.json launch under busybox sh
+        run: node --test tests/github-workflow/hooks/launch.test.mjs
 
   shellcheck:
     runs-on: ubuntu-latest
@@ -58,6 +81,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: shellcheck the shipped scripts
         run: shellcheck -S warning plugins/github-workflow/skills/github-workflow/scripts/*.sh plugins/github-workflow/hooks/run-hook.sh
+      - name: the hook launcher is POSIX sh, no bashisms
+        run: shellcheck -s sh -S style plugins/github-workflow/hooks/run-hook.sh
 
   validate:
     runs-on: ubuntu-latest
