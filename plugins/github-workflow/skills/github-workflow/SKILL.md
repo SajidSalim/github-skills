@@ -251,9 +251,9 @@ changes you did not make, or is not yours, do not switch it (rule 2): create the
 `--checkout` and work in a worktree.
 
 ```bash
-gh issue develop 231 --name fix/231-checkout-blank-coupon --base main --checkout
+gh issue develop 231 --name fix/231-checkout-blank-coupon --checkout
 # not your checkout, or changes in it you did not make:
-gh issue develop 231 --name fix/231-checkout-blank-coupon --base main
+gh issue develop 231 --name fix/231-checkout-blank-coupon
 git fetch origin fix/231-checkout-blank-coupon
 git worktree add ../231-checkout-blank-coupon fix/231-checkout-blank-coupon
 ```
@@ -316,7 +316,7 @@ test is not done.
 ## 7. Opening the PR and reporting back
 
 ```bash
-gh pr create --base main --title "fix(checkout): treat a blank coupon code as no coupon" \
+gh pr create --title "fix(checkout): treat a blank coupon code as no coupon" \
              --body-file pr.md --label "type:bug,area:checkout"
 ```
 
@@ -468,7 +468,7 @@ adapt to the repo:
 |---|---|
 | Labels | The repo's **existing** labels and conventions. Never create labels, never run `bootstrap-labels.sh` |
 | Filing | Still ask first (rule 1), and still search all states first (§4.0) and show the operator what you found. Use the repo's own issue templates; the `Searched:` block goes in your proposal, and in the body only if the template has room |
-| Claiming | Still read the thread (§5.1). In a repo the operator does not maintain, **ask before posting** pick-up or implementation comments — many projects have their own etiquette. In one they maintain, post them |
+| Claiming | Still read the thread (§5.1). In a repo the operator does not maintain, **ask before posting** pick-up or implementation comments — many projects have their own etiquette. The same goes for self-assigning (§5.2) and `gh issue develop` (§5.4), which creates a branch in their repository: ask first. In one they maintain, go ahead |
 | Branches | The repo's documented naming convention, else §5.4's |
 | PRs | §7's closing-keyword rules unchanged — one keyword per issue, never beside a negation, a quote or code; labels per the Labels row above (the repo's own) |
 | Board | Only as the repo's own docs describe; never write a Status you were not told to |
@@ -492,7 +492,7 @@ to one vendor's tooling.
 | [assets/ISSUE_TEMPLATE/](assets/ISSUE_TEMPLATE/) + [assets/pull_request_template.md](assets/pull_request_template.md) | What `/github-workflow:setup` installs into a repo |
 | [assets/GITHUB_WORKFLOW.template.md](assets/GITHUB_WORKFLOW.template.md) | Writing a repo's overlay |
 | [scripts/find-duplicates.sh](scripts/find-duplicates.sh) | Running the §4.0 duplicate check: `bash "${CLAUDE_SKILL_DIR}/scripts/find-duplicates.sh" "<title>"` |
-| [scripts/lint-issue-labels.sh](scripts/lint-issue-labels.sh) | Checking issues against the taxonomy — one, or the whole backlog with `--all`: `bash "${CLAUDE_SKILL_DIR}/scripts/lint-issue-labels.sh" <n> [--pr]` |
+| [scripts/lint-issue-labels.sh](scripts/lint-issue-labels.sh) | Checking issues against the taxonomy — one, or the backlog with `--all` (stops at `--limit`, default 500, and says so): `bash "${CLAUDE_SKILL_DIR}/scripts/lint-issue-labels.sh" <n> [--pr]` |
 | [scripts/bootstrap-labels.sh](scripts/bootstrap-labels.sh) | The repo's labels do not exist yet: `bash "${CLAUDE_SKILL_DIR}/scripts/bootstrap-labels.sh" --dry-run` |
 
 Run every script as `bash <path>`, never `./`. They need `gh` and the real `jq`: the duplicate and

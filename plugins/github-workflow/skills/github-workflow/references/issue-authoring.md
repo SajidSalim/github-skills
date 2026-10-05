@@ -35,7 +35,7 @@ protocol, term selection and what to do with each kind of hit are in
 records it.
 
 ```bash
-bash <skill-dir>/scripts/find-duplicates.sh "Checkout returns 500 when the coupon code is blank"
+bash "<skill-dir>/scripts/find-duplicates.sh" "Checkout returns 500 when the coupon code is blank"
 ```
 
 ---

@@ -2,6 +2,9 @@
 # Drop the "Question or discussion" link unless Discussions is actually enabled — check with
 #   gh repo view --json hasDiscussionsEnabled
 # A contact link to /discussions on a repo without Discussions renders as a 404.
+# Keep the "Security vulnerability" link only when private vulnerability reporting is enabled —
+#   gh api repos/OWNER/REPO/private-vulnerability-reporting -q .enabled
+# Otherwise point it at /security/policy if the repo has a SECURITY.md, or drop it.
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability

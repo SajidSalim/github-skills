@@ -10,7 +10,7 @@
 #
 #   bash lint-issue-labels.sh 231              # one issue
 #   bash lint-issue-labels.sh --pr 236         # one pull request
-#   bash lint-issue-labels.sh --all            # every open issue
+#   bash lint-issue-labels.sh --all            # open issues, up to --limit (default 500)
 #   bash lint-issue-labels.sh --all --state all
 #   bash lint-issue-labels.sh --all --quiet    # violations only, no clean-issue lines
 #   bash lint-issue-labels.sh --repo owner/name --all
@@ -194,8 +194,16 @@ done <<<"$REPORT"
 # `gh issue edit` rejects a PR number, so the remedy line has to match the mode it ran in.
 if $PR_MODE; then NOUN=PR; CMD='pr'; else NOUN=issue; CMD='issue'; fi
 
-printf '\n  %s %s(s) checked · %s clean · %s with %s violation(s)\n\n' \
-  "$total" "$NOUN" "$((total - bad))" "$bad" "$problems"
+# A full page from `gh issue list` means the sweep may have stopped short of the backlog, and
+# a clean summary must not read as a complete audit.
+TRUNC=""
+if $ALL; then
+  got=$(jq length "$DATA" | tr -d '\r')
+  if [[ "$got" -ge "$LIMIT" ]]; then TRUNC=" · stopped at --limit $LIMIT, there may be more"; fi
+fi
+
+printf '\n  %s %s(s) checked · %s clean · %s with %s violation(s)%s\n\n' \
+  "$total" "$NOUN" "$((total - bad))" "$bad" "$problems" "$TRUNC"
 
 if [[ "$bad" -gt 0 ]]; then
   printf '  Fix with `gh %s edit <n> --add-label ... --remove-label ...`, per references/labels.md.\n' "$CMD"

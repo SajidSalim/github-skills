@@ -19,6 +19,58 @@ test_references_run_the_plugins_scripts() {
   assert_contains "$(cat "$_SKILL"/references/*.md)" "<skill-dir>/scripts/find-duplicates.sh"
 }
 
+# A plugin path can hold a space (`/c/Users/Jane Doe/...`); SKILL.md quotes every script path,
+# and an agent substituting `<skill-dir>` literally needs the references to do the same.
+test_the_skills_quote_the_skill_dir_in_commands() {
+  local hits; hits=$(grep -r -n -E '(bash|node) <skill-dir>' "$PLUGIN_ROOT/skills" || true)
+  [[ -z "$hits" ]] || { printf 'unquoted <skill-dir> in a command:\n%s\n' "$hits" >&2; return 1; }
+}
+
+# An agent copies examples. The two irreversible ones say whose call they are, and the board
+# mutation shows no partial option list that would delete the options it leaves out.
+test_destructive_examples_carry_an_ask_first_warning() {
+  local board; board=$(cat "$_SKILL/references/project-board.md")
+  assert_contains "$board" "**Only on the operator's explicit instruction.**"
+  assert_contains "$board" "<every current option, verbatim, plus the new one"
+  assert_not_contains "$board" '{name: \"P0\"'
+  assert_contains "$board" "color: <its existing colour>"
+  # every `gh auth refresh` the references show is marked as the operator's to run
+  local hits; hits=$(grep -h 'gh auth refresh' "$_SKILL"/references/*.md | grep -v -i 'operator' || true)
+  [[ -z "$hits" ]] || { printf 'gh auth refresh without the operator caveat:\n%s\n' "$hits" >&2; return 1; }
+  assert_contains "$(grep 'gh label delete "wontfix"' "$_SKILL/references/gh-commands.md")" "the operator's call, never yours"
+}
+
+# The merged PR is the record of a normal fix. A standalone "post it even when the merge closed
+# the issue" reads as an instruction to duplicate it on every merge.
+test_no_resolution_comment_follows_a_normal_merge() {
+  local doc; doc=$(cat "$_ASSETS/comment-templates.md")
+  assert_contains "$doc" "**Do not write this after a normal merge.**"
+  assert_not_contains "$doc" "Post it even when the merge closed the issue automatically."
+  assert_not_contains "$(cat "$_SKILL/references/labels.md")" "the merged PR and the resolution comment"
+}
+
+# gh issue develop and gh pr create default to the repository's default branch; a literal main
+# cuts from, and opens into, the wrong branch wherever the default is something else.
+test_examples_leave_the_base_to_the_default_branch() {
+  local hits; hits=$(grep -n -H -e '--base main' "$_MAIN" "$_SKILL"/references/*.md || true)
+  [[ -z "$hits" ]] || { printf 'hard-coded --base main:\n%s\n' "$hits" >&2; return 1; }
+}
+
+# In someone else's repository, self-assigning and `gh issue develop` are visible writes too.
+test_guest_mode_asks_before_self_assign_and_issue_develop() {
+  local row; row=$(grep '^| Claiming |' "$_MAIN")
+  assert_contains "$row" 'self-assigning (§5.2) and `gh issue develop` (§5.4)'
+  assert_contains "$row" "ask first"
+}
+
+# `--all` lists at most `--limit` issues, so neither the skill nor the backlog audit the references
+# recommend may present it as the whole backlog.
+test_the_backlog_audit_is_sized_by_its_limit() {
+  assert_contains "$(grep 'scripts/lint-issue-labels.sh' "$_MAIN")" 'stops at `--limit`'
+  local hits; hits=$(grep -h -e '--all --state all' "$_SKILL"/references/*.md | grep -v -e '--limit' || true)
+  [[ -z "$hits" ]] || { printf 'backlog audit without --limit:\n%s\n' "$hits" >&2; return 1; }
+}
+
 test_no_reference_points_into_a_dot_claude_directory() {
   local hits; hits=$(grep -n -H -E '\.claude/(hooks|skills)/' "$_SKILL"/references/*.md || true)
   [[ -z "$hits" ]] || { printf '%s\n' "$hits" >&2; return 1; }
@@ -151,6 +203,15 @@ test_primary_skill_keeps_the_ten_rules() {
   done
 }
 
+# Codex, Cursor and Copilot cannot reach the plugin directory, so the pointers name the public
+# copy of the skill; and setup offers the overlay separately, so the snippet cannot assume it.
+test_the_agents_pointers_reach_the_skill_without_the_plugin() {
+  local url="https://github.com/SajidSalim/github-skills/tree/main/plugins/github-workflow/skills/github-workflow"
+  assert_contains "$(cat "$_ASSETS/AGENTS.snippet.md")" "$url"
+  assert_contains "$(cat "$_ASSETS/GITHUB_WORKFLOW.template.md")" "$url"
+  assert_contains "$(cat "$_ASSETS/AGENTS.snippet.md")" '`.github/GITHUB_WORKFLOW.md`, if present'
+}
+
 # A coding subagent may never load the skill, so the branch and discard rules also travel in the
 # AGENTS.md snippet; and §5.4 shows how to branch without switching a checkout that is not yours.
 test_the_branch_and_discard_rules_reach_every_agent() {
@@ -269,6 +330,46 @@ test_setup_and_doctor_see_that_the_agents_pointer_reaches_claude() {
   assert_contains "$(cat "$PLUGIN_ROOT/skills/doctor/SKILL.md")" "CLAUDE.md does not import AGENTS.md"
 }
 
+# GitHub reads PR and issue templates from more places than the files setup installs, so a
+# repository can end up with two PR description files or two bug forms.
+test_setup_finds_existing_templates_at_other_paths() {
+  local doc; doc=$(cat "$PLUGIN_ROOT/skills/setup/SKILL.md")
+  assert_contains "$doc" "PULL_REQUEST_TEMPLATE/"
+  assert_contains "$doc" ".github/ISSUE_TEMPLATE/"
+  assert_contains "$doc" "**replace**"
+  assert_contains "$doc" "blank_issues_enabled: false"
+  assert_contains "$doc" 'Never `git rm` it'
+}
+
+# The search runs as written in the skill: the files setup itself installs are left out, so
+# "replace" can never remove one, while their letter-case variants and the other paths stay in.
+test_setup_template_search_leaves_out_its_own_install_paths() {
+  local f="$PLUGIN_ROOT/skills/setup/SKILL.md" filters out
+  # The pipeline's grep stages, joined back into one pipeline.
+  filters=$(awk '/^git ls-files -co --exclude-standard/ {on=1; next} on && /^```/ {exit} on {print}' "$f" \
+    | sed -e 's/^ *| *//' -e 's/ *\\$//' | paste -s -d '|' -)
+  [[ "$filters" == grep* ]] || { echo "template search not found in setup" >&2; return 1; }
+  out=$(printf '%s\n' \
+    .github/pull_request_template.md .github/ISSUE_TEMPLATE/1-bug.yml .github/ISSUE_TEMPLATE/4-chore.yml \
+    .github/ISSUE_TEMPLATE/config.yml .github/PULL_REQUEST_TEMPLATE.md docs/pull_request_template.md \
+    .github/PULL_REQUEST_TEMPLATE/a.md .github/ISSUE_TEMPLATE/bug_report.yml src/pull_request_template.md \
+    .github/ISSUE_TEMPLATE/2-bug.yml \
+    | eval "$filters")
+  # 2-bug.yml is the repository's own form, not setup's 1-bug.yml: it must get the question.
+  assert_eq ".github/PULL_REQUEST_TEMPLATE.md
+docs/pull_request_template.md
+.github/PULL_REQUEST_TEMPLATE/a.md
+.github/ISSUE_TEMPLATE/bug_report.yml
+.github/ISSUE_TEMPLATE/2-bug.yml" "$out"
+}
+
+# The Security contact link tells reporters not to open a public issue, so it must lead somewhere.
+test_setup_checks_private_vulnerability_reporting_before_keeping_the_security_link() {
+  assert_contains "$(cat "$PLUGIN_ROOT/skills/setup/SKILL.md")" "private-vulnerability-reporting"
+  assert_contains "$(cat "$PLUGIN_ROOT/skills/setup/SKILL.md")" "/security/policy"
+  assert_contains "$(cat "$_ASSETS/ISSUE_TEMPLATE/config.yml")" "private-vulnerability-reporting"
+}
+
 test_setup_never_deletes_labels_itself() {
   local doc; doc=$(cat "$PLUGIN_ROOT/skills/setup/SKILL.md")
   # deleting a label strips it from every issue carrying it: the skill prints the loop, the operator runs it
@@ -334,6 +435,15 @@ test_the_publishing_guide_merges_before_tagging() {
   [[ -n "$merge" && -n "$tag" && "$merge" -lt "$tag" ]] \
     || { echo "publishing.md must merge into main before it tags (merge:${merge:-none} tag:${tag:-none})" >&2; return 1; }
   assert_contains "$(cat "$f")" "## Keep private material out of this repository"
+}
+
+# The suites pin the setup and doctor skills' text, not their behaviour, so each release runs
+# the adoption flow once in a session.
+test_the_publishing_guide_runs_setup_and_doctor_live() {
+  local doc; doc=$(cat "$REPO_ROOT/docs/publishing.md")
+  assert_contains "$doc" "/github-workflow:setup --dry-run"
+  assert_contains "$doc" "/github-workflow:doctor"
+  assert_contains "$doc" "throwaway GitHub repository"
 }
 
 test_licenses_are_mit_and_name_the_owner() {

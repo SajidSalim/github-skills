@@ -146,10 +146,7 @@ nullable in Z" — not "there was a bug in X".>
 
 **Rare exception:** you merged the PR yourself, at the operator's explicit instruction, in the same
 session. Then you *are* present at close and the merge SHA is worth recording — but keep it to what
-the PR body does not already say.
-
-Rule 7: a closing keyword records *that* it was fixed, never *how*. This comment is the *how*.
-Post it even when the merge closed the issue automatically.
+the PR body does not already say, and post it even though the merge closed the issue automatically.
 
 For a feature rather than a bug, replace **Root cause** with **What was built** and keep the rest.
 
