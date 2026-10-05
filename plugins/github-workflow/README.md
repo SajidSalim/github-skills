@@ -103,7 +103,12 @@ protocol by committing `.github/github-workflow.json`, and everywhere else the p
 The config is read from the root of the git repository the command runs in, after any `cd` before
 `gh` in the same command, so commands run from a subdirectory are covered. A `gh … --repo X` command gets the repository gates only when `X` is the configured
 repository (URL and `HOST/OWNER/REPO` forms and any case match). An edit target given by URL, and
-`GH_REPO`, name the repository the same way.
+`GH_REPO`, name the repository the same way. `GH_REPO` counts from the environment, as a prefix on
+`gh`, or set earlier in the same command with `export GH_REPO=…`, `declare -x GH_REPO=…` or
+`GH_REPO=…` (and cleared with `unset GH_REPO`), scoped as `cd` is. When the shell expands its value,
+the repository cannot be known and the command is treated as guest, unless `--repo` or an edit URL
+names it. Not followed: `source`, `eval`, `set -a`, `readonly`, `local`, or an export in a
+pipeline, in the background or behind `&&`/`||`, which is counted as if it ran.
 
 ## Gates
 
@@ -235,6 +240,20 @@ and every human who works in it — Codex, Cursor, Copilot, CI:
 The issue forms and the PR template work for everyone anyway. The hooks are Claude Code only:
 other agents follow the protocol because their instructions say so, not because a gate checks it.
 
+## Security
+
+The hooks run in whatever repository you open, before you approve anything, so they never run a
+program from it. The launcher and the hook find `node`, `git` and `bash` only in absolute `PATH`
+entries, and git runs with `core.fsmonitor` off.
+
+One lookup is out of the plugin's reach. `hooks/hooks.json` starts the launcher as `bash`, and
+Claude Code looks that name up on `PATH`, in the session's directory, before any plugin code runs.
+If your `PATH` has an empty or relative entry (`.`, a leading `:`, a `::`) ahead of bash's own
+directory, or anywhere on a machine without bash,
+a program planted in the working directory could run in place of bash, node or git.
+`/github-workflow:doctor` shows a `PATH  warning` row naming every empty or relative entry; remove
+them from `PATH`.
+
 ## Troubleshooting
 
 | Symptom | Cause and fix |
@@ -243,6 +262,7 @@ other agents follow the protocol because their instructions say so, not because 
 | A `gh issue create` without `Searched:` went through | Only adopted repositories have that gate. Run `/github-workflow:doctor` to see the mode; a `--repo` naming another repository, or a body the hook cannot read (see [Gates](#gates)), is not checked |
 | `taxonomy check  NOT RUNNING` with `not on PATH: jq` | Until it is fixed the taxonomy gate passes silently. Install `jq` ≥ 1.6. On Windows, if `jq` was installed with winget and is still not found, Claude Code inherited a `PATH` from before the install, and restarting the editor usually does not fix it: copy `jq.exe` into a directory already on `PATH`, e.g. `cp "$LOCALAPPDATA/Microsoft/WinGet/Packages/jqlang.jq_"*/jq.exe ~/bin/` when `~/bin` is on it |
 | `bash not found` or `git not found` in the self-check | The hook only runs `bash` and `git` from absolute `PATH` entries, never from the working directory or a relative entry. Put their directory on `PATH` as an absolute path |
+| `PATH  warning  relative to the working directory: …` in the self-check | `PATH` has an empty or relative entry, so a program in the repository could run in place of `bash` when Claude Code starts the hook (see [Security](#security)). Remove the named entries from `PATH` |
 | `invalid issue format: "208\r"` | CRLF from the Windows `jq` build: every captured value but the last ends in a carriage return. Pipe the capture through `tr -d '\r'` |
 | `missing required scopes [read:project]` | The token cannot read Projects boards — this is **not** "no board". Run `gh auth refresh -s read:project` (or `-s project` to move cards) |
 | `Permission denied` running a script | Git on Windows does not record the executable bit. Run scripts as `bash <path>`, never `./<path>` |
@@ -254,7 +274,7 @@ other agents follow the protocol because their instructions say so, not because 
 ## Token cost
 
 Measured with `claude --plugin-dir plugins/github-workflow plugin details github-workflow` on
-Claude Code 2.1.289, plugin 1.0.0:
+Claude Code 2.1.289, plugin 1.0.1:
 
 ```text
 Projected token cost
@@ -262,21 +282,21 @@ Projected token cost
 
 Per-component (rounded)
   component        always-on  on-invoke
-  doctor                 ~70      ~1.4k
-  github-workflow       ~130     ~11.8k
-  setup                  ~80        ~3k
+  doctor                 ~70      ~2.5k
+  github-workflow       ~130     ~12.4k
+  setup                  ~80      ~4.4k
 ```
 
 The hooks are harness-only and cost no model context; a gate's message reaches Claude only when it
 blocks, and an ask's reason is shown to you. They do cost a little time: every Bash call and every
 file edit starts the hook (bash, then Node). An edit outside an adopted checkout on its default
-branch is settled by reading a few files; git runs only when it is. The ~11.8k for
+branch is settled by reading a few files; git runs only when it is. The ~12.4k for
 `github-workflow` is paid each time the skill loads for GitHub work, and its references are read
 only when a step needs them.
 
 `plugin details` counts all three skill descriptions as always-on. `setup` and `doctor` are
 user-only, though (`disable-model-invocation: true`): Claude cannot invoke them, and their bodies
-(~3k and ~1.4k) load only when you type the command. Claude Code's skills documentation says a
+(~4.4k and ~2.5k) load only when you type the command. Claude Code's skills documentation says a
 user-only skill's description is not in the model's context either, so ~275 is an upper bound and
 the primary skill's ~130 is what every session carries. All figures are estimates.
 

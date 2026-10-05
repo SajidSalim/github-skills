@@ -373,8 +373,13 @@ function writesIn(toks) {
  * (`gh pr -R o/r create`) is moved to the end of the args.
  *
  * With `cwd`, also `dir`: the directory gh runs in, following any `cd` before it in the same
- * command, or null when that cannot be known (a `cd "$X"`). `envRepo` is a `GH_REPO=x` assignment
- * written before gh in its own command, or null.
+ * command, or null when that cannot be known (a `cd "$X"`).
+ *
+ * `envRepo` is the `GH_REPO` the command gives gh: a `GH_REPO=x` prefix on gh itself, else one set
+ * by an earlier simple command of the same command string -- `export GH_REPO=x`, a bare
+ * `GH_REPO=x`, cleared by `unset GH_REPO` -- scoped as a `cd` is (ghRepoAfter). A string, "" when
+ * cleared, or null when the command leaves it alone. `envRepoUnknown` is true when the shell
+ * expands that value, so the repository cannot be known.
  */
 export function findGhTarget(cmd, cwd) {
   return findGhTargets(cmd, cwd)[0] ?? null;
@@ -388,13 +393,26 @@ export function findGhTargets(cmd, cwd) {
   ghIn(scan.text, 0, scan.text.length, [], hits, 0);
   hits.sort((x, y) => x.t.at - y.t.at);
 
-  return hits.map(({ toks, i, t, kind, action, args, expands, last, levels, envRepo }) => {
+  return hits.map(({ toks, i, t, kind, action, args, expands, last, levels, prefix }) => {
+    // Walk to gh through each enclosing command substitution, outermost first: a substitution
+    // starts with the directory and GH_REPO its own command has reached.
+    const known = typeof cwd === "string" && cwd;
+    let dir = known ? resolve(cwd) : null;
+    let repo;
+    levels.forEach((level, k) => {
+      const shell = shellAt(scan.text, level.from, level.to, k + 1 < levels.length ? levels[k + 1].from : t.at, dir, repo);
+      dir = shell.dir;
+      repo = shell.repo;
+    });
+    // `GH_REPO=x gh ...` wins over anything set before it.
+    const env = prefix ?? repo;
     const found = {
       kind,
       action,
       args,
       expands,
-      envRepo,
+      envRepo: env && !env.unknown ? env.value : null,
+      envRepoUnknown: Boolean(env?.unknown),
       line: lineAt(t.at),
       endLine: lineAt(last.end - 1),
       at: t.at,
@@ -402,13 +420,7 @@ export function findGhTargets(cmd, cwd) {
       piped: pipedHeredocs(toks, i),
       writes: writesIn(tokenize(scan.text).filter((w) => w.end <= t.at)),
     };
-    if (typeof cwd === "string" && cwd) {
-      let dir = resolve(cwd);
-      levels.forEach((level, k) => {
-        dir = dirAt(scan.text, level.from, level.to, k + 1 < levels.length ? levels[k + 1].from : t.at, dir);
-      });
-      found.dir = dir;
-    }
+    if (known) found.dir = dir;
     return found;
   });
 }
@@ -496,16 +508,17 @@ function ghIn(text, from, to, levels, hits, depth) {
       args.push(m.v);
       expands.push(m.expands);
     }
-    // `GH_REPO=o/r gh ...` (or after `env`) names the repository for this command alone.
-    let envRepo = null;
+    // `GH_REPO=o/r gh ...` (or after `env`) names the repository for this command alone; the last
+    // such assignment wins, and an empty one leaves gh none.
+    let prefix;
     for (let p = i - 1; p >= 0 && !toks[p].op; p--) {
       const m = /^GH_REPO=(.*)$/s.exec(toks[p].v.replace(/^\(+/, ""));
-      if (m && m[1].trim() !== "") {
-        envRepo = m[1].trim();
+      if (m) {
+        prefix = toks[p].expands ? { unknown: true } : { value: m[1].trim() };
         break;
       }
     }
-    hits.push({ toks, i, t, kind: a.v, action: b.v, args, expands, last, levels: here, envRepo });
+    hits.push({ toks, i, t, kind: a.v, action: b.v, args, expands, last, levels: here, prefix });
     // Its arguments' substitutions are its body's business, not separate gh commands to judge.
     for (const s of spans) if (s.from < last.end && s.to > t.at) tried.add(s);
     i = k;
@@ -613,35 +626,88 @@ function closeDq(text, i, to) {
 }
 
 /**
- * The directory the shell is in when it reaches offset `at` within `text[from, to)`, starting in
- * `dir`: each `cd`/`pushd` before it followed, a subshell's undone when it closes, `popd` unknown.
- * Null once it cannot be known.
+ * The shell's state when it reaches offset `at` within `text[from, to)`, as `{ dir, depth, repo }`.
+ * `dir` is the directory, starting in `dir`: each `cd`/`pushd` before it followed, `popd` unknown,
+ * null once it cannot be known. `depth` is the subshells still open where the command at `at`
+ * starts -- `(cd x && gh ...)` is one. `repo` is the GH_REPO the commands before it leave, starting
+ * from `repo` (ghRepoAfter). A subshell undoes `dir` and `repo` when it closes.
  */
-function dirAt(text, from, to, at, dir) {
-  return shellAt(text, from, to, at, dir).dir;
-}
-
-/**
- * dirAt's walk, returning `{ dir, depth }`: `depth` the subshells still open where the command at
- * `at` starts -- `(cd x && gh ...)` is one.
- */
-function shellAt(text, from, to, at, dir) {
+function shellAt(text, from, to, at, dir, repo) {
   const toks = tokenize(text.slice(from, to)).map((t) => ({ ...t, at: t.at + from, end: t.end + from }));
   const saved = [];
   for (const simple of simpleCommands(toks)) {
     if (simple.length === 0) continue;
     if (simple[0].at >= at) break;
     const { words, opens, closes } = plainWords(simple, text);
-    for (let n = 0; n < opens; n++) saved.push(dir);
+    for (let n = 0; n < opens; n++) saved.push({ dir, repo });
     while (words.length > 0 && KEYWORDS.has(words[0].v)) words.shift();
     const head = words[0]?.v;
     if (head === "cd" || head === "pushd") dir = cdTarget(dir, words.slice(1));
     else if (head === "popd") dir = null;
-    // A command that reaches past `at` is the one gh runs in: its own close has not happened yet.
+    // A command that reaches past `at` is the one gh runs in: its own close has not happened yet,
+    // and an assignment in it happens after gh has run (`GH_REPO=$(gh ...)`).
     if (simple.at(-1).end > at) break;
-    for (let n = 0; n < closes && saved.length > 0; n++) dir = saved.pop();
+    repo = ghRepoAfter(words, repo);
+    for (let n = 0; n < closes && saved.length > 0; n++) ({ dir, repo } = saved.pop());
   }
-  return { dir, depth: saved.length };
+  return { dir, depth: saved.length, repo };
+}
+
+// `NAME=value`, or `NAME+=value`, which appends.
+const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)(\+?)=(.*)$/s;
+
+// The builtins that set, export or clear a variable by name.
+const DECLARERS = new Set(["export", "unset", "declare", "typeset"]);
+
+/**
+ * GH_REPO once the simple command `words` has run, from `repo` before it. A state is undefined
+ * (the command string has not touched it: the environment's applies), `{ value }` ("" when
+ * cleared) or `{ unknown: true }` (the shell expands the value, appends to it, or a word could
+ * name it).
+ *
+ * `export GH_REPO=x`, `declare`/`typeset` with an assignment, and a command of bare assignments,
+ * `GH_REPO=x`, set it; `unset GH_REPO`, `export -n GH_REPO` and `declare +x GH_REPO` clear it. A
+ * bare or undeclared assignment reaches gh only when GH_REPO is already exported, which the hook
+ * cannot see; counting it is the guest side, which fails open. A prefix, `GH_REPO=x cmd`, is that
+ * command's alone and changes nothing after it.
+ *
+ * Not followed: `source`, `eval`, `set -a`, `readonly`, `local`, and an export in a pipeline, in
+ * the background or behind `&&`/`||` -- each is taken as the cd tracking takes it.
+ */
+function ghRepoAfter(words, repo) {
+  if (words.length === 0) return repo;
+  const assigned = (w) => {
+    const m = ASSIGNMENT.exec(w.v);
+    return w.expands || m[2] ? { unknown: true } : { value: m[3].trim() };
+  };
+  if (words.every((w) => ASSIGNMENT.test(w.v))) {
+    for (const w of words) if (ASSIGNMENT.exec(w.v)[1] === "GH_REPO") repo = assigned(w);
+    return repo;
+  }
+  const head = words[0].v;
+  if (!DECLARERS.has(head)) return repo;
+  const declares = head === "declare" || head === "typeset";
+  let clear = head === "unset";
+  let nameref = false;
+  let k = 1;
+  for (; k < words.length && /^[-+]/.test(words[k].v) && !words[k].expands; k++) {
+    const flag = words[k].v;
+    if (flag === "--") {
+      k++;
+      break;
+    }
+    if (/[fF]/.test(flag)) return repo; // functions, not variables
+    if (head === "export" && flag.startsWith("-") && flag.includes("n")) clear = true;
+    if (declares && flag.startsWith("+") && flag.includes("x")) clear = true;
+    if (declares && flag.startsWith("-") && flag.includes("n")) nameref = true;
+  }
+  for (const w of words.slice(k)) {
+    const m = ASSIGNMENT.exec(w.v);
+    const name = m ? m[1] : w.v;
+    if (name === "GH_REPO") repo = nameref ? { unknown: true } : clear ? { value: "" } : m ? assigned(w) : repo;
+    else if (w.expands && !m) repo = { unknown: true }; // `export $(cat .env)`, `unset $V`
+  }
+  return repo;
 }
 
 /**
@@ -923,14 +989,15 @@ const somePaths = (label, words, fromIndex = false) => ({
  * it touches (none: the whole tree), `unknown` that the shell expands one of them, and `kinds`
  * which `git status` entries it destroys -- tracked changes, untracked files, ignored files.
  * `git stash drop|clear` is `{ label, stash: true, ref }`, and `git worktree remove -f`
- * `{ label, worktree, unknown }`.
+ * `{ label, worktree, unknown }`. `probe` lets a reftable repository's branches be asked of git
+ * (branchExists).
  */
-export function discardForm(g) {
+export function discardForm(g, probe = {}) {
   if (!g || g.moves) return null;
   const words = g.args.map((v, i) => ({ v, expands: Boolean(g.expands?.[i]) }));
   switch (g.sub) {
     case "checkout":
-      return checkoutForm(words, g.dir);
+      return checkoutForm(words, g.dir, probe);
     case "restore":
       return restoreForm(words);
     case "reset": {
@@ -955,7 +1022,7 @@ export function discardForm(g) {
  * without `--`, `.` or an argument that is an existing path -- unless -b, -B or --orphan make it
  * a new branch. A plain `git checkout feature` switches branches and is not a discard.
  */
-function checkoutForm(words, dir) {
+function checkoutForm(words, dir, probe) {
   const dd = words.findIndex((w) => w.v === "--");
   const opts = dd === -1 ? words : words.slice(0, dd);
   let force = false;
@@ -991,8 +1058,10 @@ function checkoutForm(words, dir) {
   if (force) return wholeTree("checkout");
   if (creates) return null;
   // git reads a first argument that names a branch as the branch, even when a path shares its name.
-  const gitDir = dir === null ? null : checkoutAt(dir)?.gitDir;
-  const tree = positional[0] && !positional[0].expands && gitDir && branchExists(gitDir, positional[0].v);
+  const checkout = dir === null ? null : checkoutAt(dir);
+  const tree =
+    positional[0] && !positional[0].expands && checkout &&
+    branchExists(checkout.gitDir, positional[0].v, { ...probe, root: checkout.root });
   const rest = tree ? positional.slice(1) : positional;
   const paths = rest.filter((w) => w.v === "." || (!w.expands && dir !== null && pathExists(dir, w.v)));
   if (paths.length === 0) return null;
@@ -1693,13 +1762,61 @@ function commonDir(gitDir) {
 }
 
 /**
- * Whether `name` is a local branch, or one `git checkout <name>` would create from origin's, read
- * from files: a loose ref or a `packed-refs` line. No spawn.
+ * Whether the repository whose common directory is `common` keeps its refs in a reftable
+ * (`extensions.refStorage = reftable` in its config), where there are no ref files to read.
  */
-export function branchExists(gitDir, name) {
+function usesReftable(common) {
+  let text;
+  try {
+    text = readFileSync(join(common, "config"), "utf8");
+  } catch {
+    return false;
+  }
+  let section = "";
+  let storage = "";
+  for (let line of text.split(/\r?\n/)) {
+    line = line.trim();
+    const header = /^\[([^\]]*)\](.*)$/.exec(line);
+    if (header) {
+      section = header[1].trim().toLowerCase();
+      line = header[2].trim(); // `[extensions] refStorage = reftable` on one line
+    }
+    const m = section === "extensions" && /^refstorage\s*=\s*"?([A-Za-z]+)"?\s*(?:[#;].*)?$/i.exec(line);
+    if (m) storage = m[1].toLowerCase(); // the last one wins, as in git
+  }
+  return storage === "reftable";
+}
+
+/**
+ * Whether `name` is a local branch, or one `git checkout <name>` would create from origin's. The
+ * files backend is read from disk -- a loose ref or a `packed-refs` line -- with no spawn. A
+ * reftable repository has no ref files, so there git answers (`show-ref --verify`), when `probe`
+ * gives it: `{ git, root, time, cache }`, `git` resolving the executable, `root` the checkout to
+ * run in, `time` the shared deadline, `cache` an optional Map so one command asks git once per
+ * name. Without git, or past the deadline, the answer is no: the branch is not known, which passes.
+ */
+export function branchExists(gitDir, name, probe = {}) {
   if (!name || name.startsWith("-") || /(^|\/)\.\.?($|\/)|[\0\\]/.test(name)) return false;
   const common = commonDir(gitDir);
   const refs = [`refs/heads/${name}`, `refs/remotes/origin/${name}`];
+  if (usesReftable(common)) {
+    const { git, root, time = budget, cache } = probe;
+    const key = `${common}\0${name}`;
+    if (cache?.has(key)) return cache.get(key);
+    const exe = git && root && !time.spent() ? git() : null;
+    if (!exe) return false;
+    const found = refs.some((ref) => {
+      if (time.spent()) return false;
+      const run = spawnSync(exe, [...SAFE_GIT, "show-ref", "--verify", "--quiet", ref], {
+        cwd: root,
+        encoding: "utf8",
+        timeout: time.timeout(),
+      });
+      return !run.error && run.status === 0;
+    });
+    cache?.set(key, found);
+    return found;
+  }
   const isFile = (p) => {
     try {
       return statSync(p).isFile();
@@ -1721,8 +1838,13 @@ export function branchExists(gitDir, name) {
  * repository's refs/remotes/origin/HEAD says, else main and master. A linked worktree keeps its
  * refs in the repository's common directory, which its `commondir` file names. This is the
  * filter that keeps git from running on an edit to a branch that cannot be the default.
+ *
+ * A reftable repository has no origin/HEAD file, so there `ask` answers: a function returning
+ * defaultBranches' list, which runs git under SAFE_GIT and the shared deadline. Without `ask`, main
+ * and master.
  */
-export function defaultCandidates(gitDir) {
+export function defaultCandidates(gitDir, ask = null) {
+  if (usesReftable(commonDir(gitDir))) return ask ? ask() : ["main", "master"];
   try {
     const text = readFileSync(join(commonDir(gitDir), "refs", "remotes", "origin", "HEAD"), "utf8");
     const m = /^ref:\s*refs\/remotes\/origin\/(.+?)\s*$/.exec(text);
@@ -2112,10 +2234,20 @@ export function editAsk(payload, env = process.env, time = budget) {
   if (within(checkout.gitDir, file) || within(join(checkout.root, ".git"), file)) return null;
   if (!branchGateOn(checkout.root)) return null;
   const branch = checkoutBranch(checkout, () => resolveExecutable("git", env), time);
-  if (!branch || !defaultCandidates(checkout.gitDir).includes(branch)) return null;
+  if (!branch) return null;
+  // Asked of git once, whichever check needs it first: a reftable repository's candidates need it.
+  let defaults;
+  const defaultsOf = () => {
+    if (defaults === undefined) {
+      const exe = resolveExecutable("git", env);
+      defaults = exe ? defaultBranches(exe, checkout.root, time) : [];
+    }
+    return defaults;
+  };
+  if (!defaultCandidates(checkout.gitDir, defaultsOf).includes(branch)) return null;
 
   const git = resolveExecutable("git", env);
-  if (!git || !defaultBranches(git, checkout.root, time).includes(branch)) return null;
+  if (!git || !defaultsOf().includes(branch)) return null;
   const path = slash(relative(checkout.root, file));
   // Out of time, the file is taken as not ignored: the human is asked rather than not.
   if (!time.spent()) {
@@ -2165,16 +2297,18 @@ export function gitAsk(command, cwd, payload = {}, env = process.env, time = bud
   const branchOf = (checkout) =>
     movedSomewhere ? null : moved.has(checkout.root) ? moved.get(checkout.root) : checkoutBranch(checkout, git, time);
 
+  // A reftable repository has no ref files: whether a branch exists is asked of git.
+  const probe = { git, time, cache: new Map() };
   for (const g of cmds) {
     if (g.moves) {
       moveTo(g.dir, null);
       continue;
     }
-    const form = discardForm(g);
+    const form = discardForm(g, probe);
     const reason =
       (form && discardAsk(git, g, form, who, cwd, env, time)) || branchAsk(g, branchOf, who, defaultsOf);
     if (reason) return reason;
-    const target = switchTarget(g, form);
+    const target = switchTarget(g, form, probe);
     if (target !== undefined) moveTo(g.dir, target);
   }
   return null;
@@ -2185,7 +2319,7 @@ export function gitAsk(command, cwd, payload = {}, env = process.env, time = bud
  * or the branch it names; null when that is not a known branch (--detach, `-`, a commit-ish, an
  * expansion); undefined when HEAD does not move (a path checkout, no target).
  */
-function switchTarget(g, form) {
+function switchTarget(g, form, probe) {
   if (g.sub !== "checkout" && g.sub !== "switch") return undefined;
   if (g.sub === "checkout" && form?.paths?.length) return undefined;
   const create = g.sub === "checkout" ? "bB" : "cC";
@@ -2211,8 +2345,8 @@ function switchTarget(g, form) {
   if (positional.length === 0) return undefined;
   const k = positional[0];
   if (g.expands?.[k]) return null;
-  const gitDir = g.dir === null ? null : checkoutAt(g.dir)?.gitDir;
-  return gitDir && branchExists(gitDir, g.args[k]) ? g.args[k] : null;
+  const checkout = g.dir === null ? null : checkoutAt(g.dir);
+  return checkout && branchExists(checkout.gitDir, g.args[k], { ...probe, root: checkout.root }) ? g.args[k] : null;
 }
 
 // Flags under which a commit-adding subcommand adds no commit of its own.
@@ -2227,7 +2361,7 @@ function branchAsk(g, branchOf, who, defaultsOf) {
   const checkout = checkoutAt(g.dir);
   if (!checkout || !branchGateOn(checkout.root)) return null;
   const branch = branchOf(checkout);
-  const candidates = defaultCandidates(checkout.gitDir);
+  const candidates = defaultCandidates(checkout.gitDir, () => defaultsOf(checkout.root));
 
   if (g.sub !== "push") {
     if (!branch || !candidates.includes(branch)) return null;
@@ -2328,7 +2462,7 @@ function lossOf(git, dir, form, time = budget) {
   return { where, lost };
 }
 
-function postToolUse({ kind, action, args, cwd, adopted, gates, payload, repo }) {
+function postToolUse({ kind, action, args, cwd, adopted, gates, payload, repo, envRepo }) {
   if (!adopted || gates.labelTaxonomy === false) return;
 
   const n = issueNumber(action, args, stdoutOf(payload), kind);
@@ -2336,7 +2470,13 @@ function postToolUse({ kind, action, args, cwd, adopted, gates, payload, repo })
   if (!n || !bash || !existsSync(LINTER)) return;
 
   const argv = [slash(LINTER), n, ...(kind === "pr" ? ["--pr"] : []), ...(repo ? ["--repo", repo] : [])];
-  const run = spawnSync(bash, argv, { cwd, encoding: "utf8", timeout: 40_000, env: absolutePathEnv() });
+  const env = absolutePathEnv();
+  // The command cleared GH_REPO before gh ran (`unset GH_REPO`): gh used the checkout's repository,
+  // and the linter's `gh repo view` must not pick up the one the hook inherited.
+  if (envRepo === "") {
+    for (const k of Object.keys(env)) if (k.toUpperCase() === "GH_REPO") delete env[k];
+  }
+  const run = spawnSync(bash, argv, { cwd, encoding: "utf8", timeout: 40_000, env });
 
   if (run.error || run.status === null || run.status === 0) return;
 
@@ -2361,11 +2501,11 @@ function postToolUse({ kind, action, args, cwd, adopted, gates, payload, repo })
  * handing out the pre-install copy across an app restart. Copying the binary into a directory
  * already on PATH fixes it; so does logging out.
  */
-export function selfCheck(cwd = process.cwd(), env = process.env, linter = LINTER) {
+export function selfCheck(cwd = process.cwd(), env = process.env, linter = LINTER, platform = process.platform) {
   // Resolved, not spawned by bare name -- see resolveExecutable. The `command -v` probe below
   // stays a string: bash's own lookup does not search the working directory.
-  const bash = resolveExecutable("bash", env);
-  const git = resolveExecutable("git", env);
+  const bash = resolveExecutable("bash", env, platform);
+  const git = resolveExecutable("git", env, platform);
   const bashOk = bash !== null && spawnSync(bash, ["-c", "exit 0"]).error === undefined;
   const has = (c) => bashOk && spawnSync(bash, ["-c", `command -v ${c}`]).status === 0;
   const gitOk = git !== null && spawnSync(git, ["--version"]).error === undefined;
@@ -2378,6 +2518,7 @@ export function selfCheck(cwd = process.cwd(), env = process.env, linter = LINTE
 
   return [
     { name: "node", ready: true, note: process.version },
+    pathRow(env, platform),
     {
       name: "mode",
       ready: !context.error,
@@ -2454,6 +2595,35 @@ export function selfCheck(cwd = process.cwd(), env = process.env, linter = LINTE
   ];
 }
 
+/**
+ * The self-check's PATH row: a warning naming each entry that resolves against the working
+ * directory. hooks.json starts the launcher as `bash`, and the host looks that name up on PATH
+ * before any of the plugin's code runs, so the hook cannot guard it: an empty or relative entry
+ * would let a program in the repository run in its place. The hook itself and run-hook.sh skip
+ * such entries for node, git and bash. On Windows an empty entry is left out: Git Bash, which runs
+ * the hooks there, drops it when it converts PATH, while a relative one, `.` included, survives.
+ */
+function pathRow(env, platform) {
+  const path = env?.PATH ?? env?.Path;
+  const entries = typeof path === "string" ? path.split(platform === "win32" ? ";" : ":") : [];
+  const named = [];
+  for (const e of entries) {
+    if (platform === "win32" && e === "") continue;
+    if (absoluteEntry(e, platform) !== null) continue;
+    const label = e === "" ? "an empty entry" : JSON.stringify(e);
+    if (!named.includes(label)) named.push(label);
+  }
+  if (named.length === 0) return { name: "PATH", ready: true, note: "absolute entries only" };
+  return {
+    name: "PATH",
+    ready: true,
+    warning: true,
+    note:
+      `relative to the working directory: ${named.join(", ")} -- a program planted in the working ` +
+      "directory could run in place of bash, node or git; remove these entries from PATH",
+  };
+}
+
 // ---------------------------------------------------------------- main
 
 async function main() {
@@ -2463,7 +2633,7 @@ async function main() {
     const rows = selfCheck(argValue(argv, ["--cwd"]) ?? process.cwd());
     for (const r of rows) {
       process.stdout.write(
-        `  ${r.name.padEnd(16)}${(r.ready ? "ready" : "NOT RUNNING").padEnd(14)}${r.note}\n`,
+        `  ${r.name.padEnd(16)}${(!r.ready ? "NOT RUNNING" : r.warning ? "warning" : "ready").padEnd(14)}${r.note}\n`,
       );
     }
     process.exit(rows.every((r) => r.ready) ? 0 : 1);
@@ -2503,8 +2673,11 @@ async function main() {
     // gh acts on the checkout it runs in: after a `cd`, that one. Unknown: guest, which fails open.
     const where = found.dir === undefined ? cwd : found.dir;
     const context = where === null ? {} : loadRepoContext(where);
-    const repo = ghRepo(found.args, found.envRepo ? { ...process.env, GH_REPO: found.envRepo } : process.env);
-    const adopted = isAdopted(context, repo);
+    const repo = ghRepo(found.args, found.envRepo === null ? process.env : { ...process.env, GH_REPO: found.envRepo });
+    // A GH_REPO the shell expands, with no --repo or URL to outrank it: the repository is unknown,
+    // so guest, which fails open.
+    const unknown = found.envRepoUnknown && ghRepo(found.args, {}) === null;
+    const adopted = !unknown && isAdopted(context, repo);
     const gates = adopted ? (context.config.gates ?? {}) : {};
     const state = { ...found, cwd: where ?? cwd, dir: where, context, adopted, gates, payload, repo };
 

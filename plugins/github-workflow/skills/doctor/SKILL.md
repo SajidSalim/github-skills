@@ -7,8 +7,8 @@ disable-model-invocation: true
 # github-workflow doctor
 
 **Read-only:** change nothing, create nothing. Run each check, then print one table — `ready`,
-`NOT RUNNING` or `n/a` per row, with the fix for every row that is not ready — and end with a
-one-line verdict.
+`warning`, `NOT RUNNING` or `n/a` per row, with the fix for every row that is not ready — and end
+with a one-line verdict.
 
 ## 1. The hook's self-check
 
@@ -26,6 +26,15 @@ commit or push on the default branch — reads `inactive here (guest mode)`, `of
 reads `off -- plugin option discard_gate`, `off -- repo config` or `on`. Both need `git`:
 `NOT RUNNING  git not found` means that gate lets everything through. Fix: put git's directory on
 `PATH` as an absolute entry.
+
+The `PATH` row reads `warning` when `PATH` has an empty or relative entry, and names it. Claude
+Code starts the hook as `bash` by name, looked up on `PATH` in the session's directory before any
+plugin code runs, so a program planted in the working directory could run in place of bash, node
+or git. That happens when the entry (`.`, a leading `:`, a `::`) comes before bash's own
+directory, or anywhere when bash is not installed; a trailing `:` is searched last. The gates still
+work; the risk is the user's environment. Fix: remove those entries from `PATH` where it is set — a
+shell profile, or the environment variables on Windows. The row reads the Bash tool's `PATH`, which
+can differ from the one Claude Code itself has.
 
 ## 2. Tools
 
@@ -124,6 +133,6 @@ proposes it). `n/a` when there is no snippet or no `CLAUDE.md`.
 
 | Check | Status | Detail / fix |
 |---|---|---|
-| … | ready / NOT RUNNING / n/a | … |
+| … | ready / warning / NOT RUNNING / n/a | … |
 
 Verdict: **all gates live**, or the single most important fix first.
