@@ -1774,19 +1774,21 @@ function usesReftable(common) {
  * Whether `name` is a local branch, or one `git checkout <name>` would create from origin's. The
  * files backend is read from disk -- a loose ref or a `packed-refs` line -- with no spawn. A
  * reftable repository has no ref files, so there git answers (`show-ref --verify`), when `probe`
- * gives it: `{ git, root, time }`, `git` resolving the executable, `root` the checkout to run in,
- * `time` the shared deadline. Without git, or past the deadline, the answer is no: the branch is
- * not known, which passes.
+ * gives it: `{ git, root, time, cache }`, `git` resolving the executable, `root` the checkout to
+ * run in, `time` the shared deadline, `cache` an optional Map so one command asks git once per
+ * name. Without git, or past the deadline, the answer is no: the branch is not known, which passes.
  */
 export function branchExists(gitDir, name, probe = {}) {
   if (!name || name.startsWith("-") || /(^|\/)\.\.?($|\/)|[\0\\]/.test(name)) return false;
   const common = commonDir(gitDir);
   const refs = [`refs/heads/${name}`, `refs/remotes/origin/${name}`];
   if (usesReftable(common)) {
-    const { git, root, time = budget } = probe;
+    const { git, root, time = budget, cache } = probe;
+    const key = `${common}\0${name}`;
+    if (cache?.has(key)) return cache.get(key);
     const exe = git && root && !time.spent() ? git() : null;
     if (!exe) return false;
-    return refs.some((ref) => {
+    const found = refs.some((ref) => {
       if (time.spent()) return false;
       const run = spawnSync(exe, [...SAFE_GIT, "show-ref", "--verify", "--quiet", ref], {
         cwd: root,
@@ -1795,6 +1797,8 @@ export function branchExists(gitDir, name, probe = {}) {
       });
       return !run.error && run.status === 0;
     });
+    cache?.set(key, found);
+    return found;
   }
   const isFile = (p) => {
     try {
@@ -2277,7 +2281,7 @@ export function gitAsk(command, cwd, payload = {}, env = process.env, time = bud
     movedSomewhere ? null : moved.has(checkout.root) ? moved.get(checkout.root) : checkoutBranch(checkout, git, time);
 
   // A reftable repository has no ref files: whether a branch exists is asked of git.
-  const probe = { git, time };
+  const probe = { git, time, cache: new Map() };
   for (const g of cmds) {
     if (g.moves) {
       moveTo(g.dir, null);

@@ -1611,5 +1611,12 @@ describe("branchExists", () => {
     assert.equal(branchExists(gitDir, "main"), false, "no git: unknown, which passes");
     assert.equal(branchExists(gitDir, "main", { ...probe, git: () => null }), false);
     assert.equal(branchExists(gitDir, "main", { ...probe, time: makeBudget(0) }), false, "past the deadline");
+
+    // One command asks about the same name twice (discard form, then switch target): git runs once.
+    let runs = 0;
+    const cached = { git: () => (runs++, resolveExecutable("git")), root: d, cache: new Map() };
+    assert.equal(branchExists(gitDir, "feat/x", cached), true);
+    assert.equal(branchExists(gitDir, "feat/x", cached), true);
+    assert.equal(runs, 1);
   });
 });
