@@ -34,6 +34,14 @@ jobs:
         run: bash tests/github-workflow/run-tests.sh
       - name: Node suite
         run: node --test tests/github-workflow/hooks/*.test.mjs
+      # On Windows this includes the PowerShell host check: a planted <drive>:\bin\sh.cmd on a
+      # subst drive must never run. It must not be skipped.
+      - name: hooks.json launch through Git Bash and PowerShell, nothing skipped
+        if: runner.os == 'Windows'
+        run: |
+          node --test --test-reporter=tap tests/github-workflow/hooks/launch.test.mjs > launch.tap || { cat launch.tap; exit 1; }
+          cat launch.tap
+          grep -q '^# skipped 0$' launch.tap || { echo "launch.test.mjs skipped cases" >&2; exit 1; }
 
   bash32:
     name: scripts under macOS /bin/bash 3.2
@@ -54,8 +62,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: hooks.json launch through macOS /bin/sh
-        run: node --test tests/github-workflow/hooks/launch.test.mjs
+      - name: hooks.json launch through macOS /bin/sh, nothing skipped
+        run: |
+          node --test --test-reporter=tap tests/github-workflow/hooks/launch.test.mjs > launch.tap || { cat launch.tap; exit 1; }
+          cat launch.tap
+          grep -q '^# skipped 0$' launch.tap || { echo "launch.test.mjs skipped cases" >&2; exit 1; }
 
   nobash:
     name: hooks.json launch with no bash (Alpine, busybox sh)
@@ -72,8 +83,12 @@ jobs:
         run: |
           ls -l /bin/sh
           if command -v bash; then echo "bash is installed; this job must run without it" >&2; exit 1; fi
-      - name: hooks.json launch under busybox sh
-        run: node --test tests/github-workflow/hooks/launch.test.mjs
+      # node --test exits 0 when a case is skipped; this job exists to run every case.
+      - name: hooks.json launch under busybox sh, nothing skipped
+        run: |
+          node --test --test-reporter=tap tests/github-workflow/hooks/launch.test.mjs > launch.tap || { cat launch.tap; exit 1; }
+          cat launch.tap
+          grep -q '^# skipped 0$' launch.tap || { echo "launch.test.mjs skipped cases" >&2; exit 1; }
 
   shellcheck:
     runs-on: ubuntu-latest
