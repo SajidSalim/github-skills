@@ -1388,7 +1388,7 @@ export function changedFiles(cwd, base, head = "HEAD") {
   if (!usable(base) || !usable(head) || budget.spent()) return null;
   const git = resolveExecutable("git");
   if (!git) return null;
-  const run = spawnSync(git, ["diff", "--name-only", `${base}...${head}`, "--"], {
+  const run = spawnSync(git, [...SAFE_GIT, "diff", "--name-only", `${base}...${head}`, "--"], {
     cwd,
     encoding: "utf8",
     timeout: budget.timeout(),
@@ -1831,7 +1831,7 @@ export function deployBases(cwd, baseFlag) {
   if (baseFlag) return baseFlag.startsWith("-") ? [] : [`origin/${baseFlag}`, baseFlag];
   const git = resolveExecutable("git");
   if (!git) return ["origin/main", "main"];
-  const head = spawnSync(git, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], {
+  const head = spawnSync(git, [...SAFE_GIT, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], {
     cwd,
     encoding: "utf8",
     timeout: budget.timeout(),
