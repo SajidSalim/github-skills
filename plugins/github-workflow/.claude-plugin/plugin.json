@@ -6,6 +6,10 @@
   "author": { "name": "SajidSalim", "url": "https://github.com/SajidSalim" },
   "homepage": "https://github.com/SajidSalim/github-skills/tree/main/plugins/github-workflow",
   "repository": "https://github.com/SajidSalim/github-skills",
+  "documentationUrl": "https://github.com/SajidSalim/github-skills/blob/main/plugins/github-workflow/README.md",
+  "supportUrl": "https://github.com/SajidSalim/github-skills/issues",
+  "privacyPolicyUrl": "https://github.com/SajidSalim/github-skills/blob/main/plugins/github-workflow/PRIVACY.md",
+  "termsOfServiceUrl": "https://github.com/SajidSalim/github-skills/blob/main/plugins/github-workflow/LICENSE",
   "license": "MIT",
   "keywords": ["github", "issues", "pull-requests", "labels", "triage", "project-board", "gh", "workflow"],
   "userConfig": {
