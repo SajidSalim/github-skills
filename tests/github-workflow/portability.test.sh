@@ -16,12 +16,30 @@ test_shipped_scripts_avoid_bash_4_only_features() {
   [[ -z "$hits" ]] || { printf 'bash 4+ only (macOS /bin/bash is 3.2):\n%s\n' "$hits" >&2; return 1; }
 }
 
+_LAUNCHER="hooks/run-hook.sh"
+
+# The scripts are bash; the hook launcher alone is POSIX sh, since hooks.json starts it as
+# `/bin/sh <path>` and /bin/sh is not bash on Debian, Ubuntu or Alpine.
 test_shipped_scripts_start_with_a_bash_shebang() {
   local f bad=""
   while IFS= read -r f; do
+    [[ "$f" == "$PLUGIN_ROOT/$_LAUNCHER" ]] && continue
     [[ "$(head -n1 "$f")" == "#!/usr/bin/env bash" ]] || bad="$bad $f"
   done < <(_shipped_scripts)
   [[ -z "$bad" ]] || { printf 'missing #!/usr/bin/env bash:%s\n' "$bad" >&2; return 1; }
+  assert_eq "#!/bin/sh" "$(head -n1 "$PLUGIN_ROOT/$_LAUNCHER")" "the launcher is POSIX sh"
+}
+
+# dash and busybox ash reject these, and macOS's bash-as-sh would hide it. Comments are skipped.
+# shellcheck -s sh (in CI) and checkbashisms, when installed, check the same file more fully.
+test_the_hook_launcher_has_no_bashisms() {
+  local f="$PLUGIN_ROOT/$_LAUNCHER" hits
+  hits=$(grep -n -v -E '^[[:space:]]*#' "$f" | grep -E \
+    '\[\[|BASH_SOURCE|\$\{[A-Za-z_][A-Za-z0-9_]*(/|:[0-9-]|\^|,)|\$\{#?[A-Za-z_][A-Za-z0-9_]*\[|^[^#]*[A-Za-z_][A-Za-z0-9_]*=\(|<<<|\$'"'"'|(^|[[:space:];:])(local|declare|typeset|shopt|source|function|select|let|mapfile|readarray)([[:space:]]|$)|pipefail|==|&>|\$RANDOM|\$\(\(.*\*\*' \
+    || true)
+  [[ -z "$hits" ]] || { printf 'bashisms in the POSIX sh launcher:\n%s\n' "$hits" >&2; return 1; }
+  if command -v checkbashisms >/dev/null 2>&1; then checkbashisms "$f"; fi
+  if command -v shellcheck >/dev/null 2>&1; then shellcheck -s sh -S warning "$f"; fi
 }
 
 # Counted with tr, not grep: Git Bash drops a $'\r' written inside $(...), which turns
