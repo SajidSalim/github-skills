@@ -145,6 +145,12 @@ describe("findGhTarget", () => {
     assert.deepEqual(findGhTarget(`(gh pr create --title "a)" --body "")`).args, ["--title", "a)", "--body", ""]);
   });
 
+  test("a subshell opened before gh closes on its last argument, which keeps its own text", () => {
+    assert.deepEqual(findGhTarget(`(cd sub && gh pr create --repo a/b)`).args, ["--repo", "a/b"]);
+    assert.deepEqual(findGhTarget(`( (cd sub && gh pr create -b "x)"))`).args, ["-b", "x)"]);
+    assert.deepEqual(findGhTarget(`(cd sub) && gh pr create -b x`).args, ["-b", "x"]);
+  });
+
   test("never inside single quotes", () => {
     assert.equal(findGhTarget(`echo '$(gh pr create --body x)'`), null);
   });

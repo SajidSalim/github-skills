@@ -789,6 +789,18 @@ describe("PreToolUse — command shapes", () => {
     assert.equal(runHook(pre(`(cd sub) && gh pr create --title t --body-file pr.md`, dir)).status, 0);
   });
 
+  // The `)` closing a subshell opened before gh's own word sticks to gh's last argument.
+  test("(cd DIR && gh ... LAST): the subshell's ) is not part of the last argument", () => {
+    const dir = repoDir(ADOPTED);
+    mkdirSync(join(dir, "sub"));
+    writeFileSync(join(dir, "sub", "pr.md"), "This does not close #12.\n");
+    assert.equal(runHook(pre(`(cd sub && gh pr create --title t --body-file pr.md)`, dir)).status, 2);
+    assert.equal(runHook(pre(`(cd . && gh issue create --title t --body x --repo acme/shop)`, dir)).status, 2);
+    assert.equal(runHook(pre(`(cd . && gh issue create --title t --body x --repo acme/other)`, dir)).status, 0);
+  });
+
+  //@@I2
+
   test("a --body-file after a cd the hook cannot follow is skipped, never read from the wrong place", () => {
     const dir = temp("guest");
     writeFileSync(join(dir, "pr.md"), "This does not close #12.\n");

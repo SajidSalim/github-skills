@@ -451,7 +451,9 @@ function ghIn(text, from, to, levels) {
     const args = [];
     const expands = [];
     let last = b;
-    let open = opens;
+    // Subshells open around gh: its own `(gh`, and any opened earlier, `(cd x && gh ...)`.
+    const around = opens + shellAt(text, from, to, t.at, null).depth;
+    let open = around;
     for (let k = j + 1; k < toks.length && !toks[k].op; k++) {
       last = toks[k];
       if (MARK.test(toks[k].v)) continue; // a heredoc operator, not an argument
@@ -468,7 +470,7 @@ function ghIn(text, from, to, levels) {
         args.push(v.replace(MARKS, " "));
         expands.push(toks[k].expands);
       }
-      if (opens > 0 && open === 0) break;
+      if (around > 0 && open === 0) break;
     }
     for (const m of moved) {
       args.push(m.v);
@@ -582,6 +584,14 @@ function closeDq(text, i, to) {
  * Null once it cannot be known.
  */
 function dirAt(text, from, to, at, dir) {
+  return shellAt(text, from, to, at, dir).dir;
+}
+
+/**
+ * dirAt's walk, returning `{ dir, depth }`: `depth` the subshells still open where the command at
+ * `at` starts -- `(cd x && gh ...)` is one.
+ */
+function shellAt(text, from, to, at, dir) {
   const toks = tokenize(text.slice(from, to)).map((t) => ({ ...t, at: t.at + from, end: t.end + from }));
   const saved = [];
   for (const simple of simpleCommands(toks)) {
@@ -597,7 +607,7 @@ function dirAt(text, from, to, at, dir) {
     if (simple.at(-1).end > at) break;
     for (let n = 0; n < closes && saved.length > 0; n++) dir = saved.pop();
   }
-  return dir;
+  return { dir, depth: saved.length };
 }
 
 /** The heredocs fed to the simple command piped into `toks[i]`'s: `cat <<'EOF' | gh ...`. */
