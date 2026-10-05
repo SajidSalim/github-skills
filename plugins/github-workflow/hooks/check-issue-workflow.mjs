@@ -373,8 +373,13 @@ function writesIn(toks) {
  * (`gh pr -R o/r create`) is moved to the end of the args.
  *
  * With `cwd`, also `dir`: the directory gh runs in, following any `cd` before it in the same
- * command, or null when that cannot be known (a `cd "$X"`). `envRepo` is a `GH_REPO=x` assignment
- * written before gh in its own command, or null.
+ * command, or null when that cannot be known (a `cd "$X"`).
+ *
+ * `envRepo` is the `GH_REPO` the command gives gh: a `GH_REPO=x` prefix on gh itself, else one set
+ * by an earlier simple command of the same command string -- `export GH_REPO=x`, a bare
+ * `GH_REPO=x`, cleared by `unset GH_REPO` -- scoped as a `cd` is (ghRepoAfter). A string, "" when
+ * cleared, or null when the command leaves it alone. `envRepoUnknown` is true when the shell
+ * expands that value, so the repository cannot be known.
  */
 export function findGhTarget(cmd, cwd) {
   return findGhTargets(cmd, cwd)[0] ?? null;
@@ -388,13 +393,26 @@ export function findGhTargets(cmd, cwd) {
   ghIn(scan.text, 0, scan.text.length, [], hits, 0);
   hits.sort((x, y) => x.t.at - y.t.at);
 
-  return hits.map(({ toks, i, t, kind, action, args, expands, last, levels, envRepo }) => {
+  return hits.map(({ toks, i, t, kind, action, args, expands, last, levels, prefix }) => {
+    // Walk to gh through each enclosing command substitution, outermost first: a substitution
+    // starts with the directory and GH_REPO its own command has reached.
+    const known = typeof cwd === "string" && cwd;
+    let dir = known ? resolve(cwd) : null;
+    let repo;
+    levels.forEach((level, k) => {
+      const shell = shellAt(scan.text, level.from, level.to, k + 1 < levels.length ? levels[k + 1].from : t.at, dir, repo);
+      dir = shell.dir;
+      repo = shell.repo;
+    });
+    // `GH_REPO=x gh ...` wins over anything set before it.
+    const env = prefix ?? repo;
     const found = {
       kind,
       action,
       args,
       expands,
-      envRepo,
+      envRepo: env && !env.unknown ? env.value : null,
+      envRepoUnknown: Boolean(env?.unknown),
       line: lineAt(t.at),
       endLine: lineAt(last.end - 1),
       at: t.at,
@@ -402,13 +420,7 @@ export function findGhTargets(cmd, cwd) {
       piped: pipedHeredocs(toks, i),
       writes: writesIn(tokenize(scan.text).filter((w) => w.end <= t.at)),
     };
-    if (typeof cwd === "string" && cwd) {
-      let dir = resolve(cwd);
-      levels.forEach((level, k) => {
-        dir = dirAt(scan.text, level.from, level.to, k + 1 < levels.length ? levels[k + 1].from : t.at, dir);
-      });
-      found.dir = dir;
-    }
+    if (known) found.dir = dir;
     return found;
   });
 }
@@ -496,16 +508,17 @@ function ghIn(text, from, to, levels, hits, depth) {
       args.push(m.v);
       expands.push(m.expands);
     }
-    // `GH_REPO=o/r gh ...` (or after `env`) names the repository for this command alone.
-    let envRepo = null;
+    // `GH_REPO=o/r gh ...` (or after `env`) names the repository for this command alone; the last
+    // such assignment wins, and an empty one leaves gh none.
+    let prefix;
     for (let p = i - 1; p >= 0 && !toks[p].op; p--) {
       const m = /^GH_REPO=(.*)$/s.exec(toks[p].v.replace(/^\(+/, ""));
-      if (m && m[1].trim() !== "") {
-        envRepo = m[1].trim();
+      if (m) {
+        prefix = toks[p].expands ? { unknown: true } : { value: m[1].trim() };
         break;
       }
     }
-    hits.push({ toks, i, t, kind: a.v, action: b.v, args, expands, last, levels: here, envRepo });
+    hits.push({ toks, i, t, kind: a.v, action: b.v, args, expands, last, levels: here, prefix });
     // Its arguments' substitutions are its body's business, not separate gh commands to judge.
     for (const s of spans) if (s.from < last.end && s.to > t.at) tried.add(s);
     i = k;
@@ -613,35 +626,71 @@ function closeDq(text, i, to) {
 }
 
 /**
- * The directory the shell is in when it reaches offset `at` within `text[from, to)`, starting in
- * `dir`: each `cd`/`pushd` before it followed, a subshell's undone when it closes, `popd` unknown.
- * Null once it cannot be known.
+ * The shell's state when it reaches offset `at` within `text[from, to)`, as `{ dir, depth, repo }`.
+ * `dir` is the directory, starting in `dir`: each `cd`/`pushd` before it followed, `popd` unknown,
+ * null once it cannot be known. `depth` is the subshells still open where the command at `at`
+ * starts -- `(cd x && gh ...)` is one. `repo` is the GH_REPO the commands before it leave, starting
+ * from `repo` (ghRepoAfter). A subshell undoes `dir` and `repo` when it closes.
  */
-function dirAt(text, from, to, at, dir) {
-  return shellAt(text, from, to, at, dir).dir;
-}
-
-/**
- * dirAt's walk, returning `{ dir, depth }`: `depth` the subshells still open where the command at
- * `at` starts -- `(cd x && gh ...)` is one.
- */
-function shellAt(text, from, to, at, dir) {
+function shellAt(text, from, to, at, dir, repo) {
   const toks = tokenize(text.slice(from, to)).map((t) => ({ ...t, at: t.at + from, end: t.end + from }));
   const saved = [];
   for (const simple of simpleCommands(toks)) {
     if (simple.length === 0) continue;
     if (simple[0].at >= at) break;
     const { words, opens, closes } = plainWords(simple, text);
-    for (let n = 0; n < opens; n++) saved.push(dir);
+    for (let n = 0; n < opens; n++) saved.push({ dir, repo });
     while (words.length > 0 && KEYWORDS.has(words[0].v)) words.shift();
     const head = words[0]?.v;
     if (head === "cd" || head === "pushd") dir = cdTarget(dir, words.slice(1));
     else if (head === "popd") dir = null;
-    // A command that reaches past `at` is the one gh runs in: its own close has not happened yet.
+    // A command that reaches past `at` is the one gh runs in: its own close has not happened yet,
+    // and an assignment in it happens after gh has run (`GH_REPO=$(gh ...)`).
     if (simple.at(-1).end > at) break;
-    for (let n = 0; n < closes && saved.length > 0; n++) dir = saved.pop();
+    repo = ghRepoAfter(words, repo);
+    for (let n = 0; n < closes && saved.length > 0; n++) ({ dir, repo } = saved.pop());
   }
-  return { dir, depth: saved.length };
+  return { dir, depth: saved.length, repo };
+}
+
+const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s;
+
+/**
+ * GH_REPO once the simple command `words` has run, from `repo` before it. A state is undefined
+ * (the command string has not touched it: the environment's applies), `{ value }` ("" when
+ * cleared) or `{ unknown: true }` (the shell expands the value, or a word that could name it).
+ *
+ * `export GH_REPO=x` and a command of bare assignments, `GH_REPO=x`, set it; `unset GH_REPO` and
+ * `export -n GH_REPO` clear it. A bare assignment reaches gh only when GH_REPO is already
+ * exported, which the hook cannot see; counting it is the guest side, which fails open. A prefix,
+ * `GH_REPO=x cmd`, is that command's alone and changes nothing after it.
+ */
+function ghRepoAfter(words, repo) {
+  if (words.length === 0) return repo;
+  const assigned = (w) => (w.expands ? { unknown: true } : { value: ASSIGNMENT.exec(w.v)[2].trim() });
+  if (words.every((w) => ASSIGNMENT.test(w.v))) {
+    for (const w of words) if (ASSIGNMENT.exec(w.v)[1] === "GH_REPO") repo = assigned(w);
+    return repo;
+  }
+  const head = words[0].v;
+  if (head !== "export" && head !== "unset") return repo;
+  let clear = head === "unset";
+  let k = 1;
+  for (; k < words.length && /^-/.test(words[k].v) && !words[k].expands; k++) {
+    if (words[k].v === "--") {
+      k++;
+      break;
+    }
+    if (words[k].v.includes("f")) return repo; // functions, not variables
+    if (head === "export" && words[k].v.includes("n")) clear = true;
+  }
+  for (const w of words.slice(k)) {
+    const m = ASSIGNMENT.exec(w.v);
+    const name = m ? m[1] : w.v;
+    if (name === "GH_REPO") repo = clear ? { value: "" } : m ? assigned(w) : repo;
+    else if (w.expands && !m) repo = { unknown: true }; // `export $(cat .env)`, `unset $V`
+  }
+  return repo;
 }
 
 /**
@@ -2552,8 +2601,11 @@ async function main() {
     // gh acts on the checkout it runs in: after a `cd`, that one. Unknown: guest, which fails open.
     const where = found.dir === undefined ? cwd : found.dir;
     const context = where === null ? {} : loadRepoContext(where);
-    const repo = ghRepo(found.args, found.envRepo ? { ...process.env, GH_REPO: found.envRepo } : process.env);
-    const adopted = isAdopted(context, repo);
+    const repo = ghRepo(found.args, found.envRepo === null ? process.env : { ...process.env, GH_REPO: found.envRepo });
+    // A GH_REPO the shell expands, with no --repo or URL to outrank it: the repository is unknown,
+    // so guest, which fails open.
+    const unknown = found.envRepoUnknown && ghRepo(found.args, {}) === null;
+    const adopted = !unknown && isAdopted(context, repo);
     const gates = adopted ? (context.config.gates ?? {}) : {};
     const state = { ...found, cwd: where ?? cwd, dir: where, context, adopted, gates, payload, repo };
 

@@ -326,6 +326,56 @@ describe("findGhTarget — where the gh command sits", () => {
   });
 });
 
+describe("findGhTargets — GH_REPO set earlier in the command", () => {
+  const repoOf = (cmd) => findGhTarget(cmd).envRepo;
+  const unknown = (cmd) => findGhTarget(cmd).envRepoUnknown;
+
+  test("export and a bare assignment reach a later gh", () => {
+    assert.equal(repoOf(`export GH_REPO=o/r; gh issue create -b x`), "o/r");
+    assert.equal(repoOf(`export A=1 "GH_REPO=o/r" && gh issue create -b x`), "o/r");
+    assert.equal(repoOf(`GH_REPO=o/r; gh issue create -b x`), "o/r");
+    assert.equal(repoOf(`A=1 GH_REPO=o/r\ngh issue create -b x`), "o/r");
+    assert.equal(repoOf(`export GH_REPO=; gh issue create -b x`), "", "empty: none");
+  });
+
+  test("a prefix on another command is that command's alone; gh's own prefix wins", () => {
+    assert.equal(repoOf(`GH_REPO=o/r true; gh issue create -b x`), null);
+    assert.equal(repoOf(`export GH_REPO=a/b; GH_REPO=c/d gh issue create -b x`), "c/d");
+    assert.equal(repoOf(`gh issue create -b "GH_REPO=o/r"`), null);
+  });
+
+  test("unset and export -n clear it; unset -f does not", () => {
+    assert.equal(repoOf(`export GH_REPO=o/r; unset GH_REPO; gh issue create -b x`), "");
+    assert.equal(repoOf(`unset -v A GH_REPO && gh issue create -b x`), "");
+    assert.equal(repoOf(`export -n GH_REPO; gh issue create -b x`), "");
+    assert.equal(repoOf(`unset -f GH_REPO; gh issue create -b x`), null);
+  });
+
+  test("scoped like cd: a subshell's is undone, a command substitution inherits", () => {
+    assert.equal(repoOf(`(export GH_REPO=o/r) && gh issue create -b x`), null);
+    assert.equal(repoOf(`(export GH_REPO=o/r && gh issue create -b x)`), "o/r");
+    assert.equal(repoOf(`export GH_REPO=o/r; N=$(gh issue create -b x)`), "o/r");
+    assert.equal(repoOf(`N=$(export GH_REPO=o/r); gh issue create -b x`), null);
+    assert.equal(repoOf(`GH_REPO=$(gh issue create -b x)`), null, "set only after gh has run");
+  });
+
+  test("each gh sees what came before it", () => {
+    const all = findGhTargets(`gh issue create -b x; export GH_REPO=o/r; gh pr create -b y; unset GH_REPO; gh pr edit 1`);
+    assert.deepEqual(all.map((f) => f.envRepo), [null, "o/r", ""]);
+  });
+
+  test("a value the shell expands is unknown, until a literal one replaces it", () => {
+    assert.equal(unknown(`export GH_REPO="$R"; gh issue create -b x`), true);
+    assert.equal(unknown(`GH_REPO="$(cat f)"; gh issue create -b x`), true);
+    assert.equal(unknown(`GH_REPO=$R gh issue create -b x`), true);
+    assert.equal(unknown(`export $(cat .env | xargs); gh issue create -b x`), true);
+    assert.equal(unknown(`unset $V; gh issue create -b x`), true);
+    assert.equal(unknown(`export GH_REPO=$R; export GH_REPO=o/r; gh issue create -b x`), false);
+    assert.equal(unknown(`export A="$R"; gh issue create -b x`), false, "another variable");
+    assert.equal(unknown(`gh issue create -b x`), false);
+  });
+});
+
 describe("argValue", () => {
   test("reads the space-separated form", () => {
     assert.equal(argValue(["--body", "x"], ["--body", "-b"]), "x");

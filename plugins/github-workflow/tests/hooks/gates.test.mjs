@@ -942,6 +942,34 @@ describe("--repo", () => {
     assert.equal(runHook(pre(cmd, repoDir(ADOPTED)), { env: { GH_REPO: "acme/other" } }).status, 2);
   });
 
+  // GH_REPO exported or assigned earlier in the same command reaches gh, as a cd does.
+  test("GH_REPO set earlier in the command names the repository", () => {
+    const dir = repoDir(ADOPTED);
+    const create = `gh issue create --title x --body plain`;
+    assert.equal(runHook(pre(`export GH_REPO=acme/other; ${create}`, dir)).status, 0);
+    assert.equal(runHook(pre(`GH_REPO=acme/other && ${create}`, dir)).status, 0);
+    assert.equal(runHook(pre(`export GH_REPO=acme/shop && ${create}`, dir)).status, 2);
+    assert.equal(runHook(pre(`(export GH_REPO=acme/other) && ${create}`, dir)).status, 2, "a subshell's is undone");
+    assert.equal(runHook(pre(`GH_REPO=acme/other true; ${create}`, dir)).status, 2, "a prefix is that command's alone");
+  });
+
+  test("unset GH_REPO clears it, an inherited one too", () => {
+    const dir = repoDir(ADOPTED);
+    const create = `gh issue create --title x --body plain`;
+    assert.equal(runHook(pre(`export GH_REPO=acme/other; unset GH_REPO; ${create}`, dir)).status, 2);
+    assert.equal(runHook(pre(`unset GH_REPO && ${create}`, dir), { env: { GH_REPO: "acme/other" } }).status, 2);
+  });
+
+  test("a GH_REPO the shell expands is unknown: guest, unless --repo names the repository", () => {
+    const dir = repoDir(ADOPTED);
+    assert.equal(runHook(pre(`export GH_REPO="$TARGET"; gh issue create --title x --body plain`, dir)).status, 0);
+    assert.equal(runHook(pre(`GH_REPO=$(cat repo.txt); gh issue create --title x --body plain`, dir)).status, 0);
+    assert.equal(
+      runHook(pre(`export GH_REPO="$TARGET"; gh issue create --repo acme/shop --title x --body plain`, dir)).status,
+      2,
+    );
+  });
+
   test("a config that names no repo cannot vouch for --repo", () => {
     const cmd = `gh issue create --repo acme/shop --title x --body plain`;
     assert.equal(runHook(pre(cmd, repoDir({ version: 1 }))).status, 0);
