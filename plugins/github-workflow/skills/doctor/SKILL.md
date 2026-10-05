@@ -30,10 +30,11 @@ reads `off -- plugin option discard_gate`, `off -- repo config` or `on`. Both ne
 The `PATH` row reads `warning` when `PATH` has an empty or relative entry, and names it. Claude
 Code starts the hook as `bash` by name, looked up on `PATH` in the session's directory before any
 plugin code runs, so a program planted in the working directory could run in place of bash, node
-or git. The gates still work; the risk is the user's environment. Fix: remove those entries from
-`PATH` where it is set — a shell profile, or the environment variables on Windows; a trailing `:`
-or a `.` is enough to cause it. The row reads the Bash tool's `PATH`, which can differ from the
-one Claude Code itself has.
+or git. That happens when the entry (`.`, a leading `:`, a `::`) comes before bash's own
+directory, or anywhere when bash is not installed; a trailing `:` is searched last. The gates still
+work; the risk is the user's environment. Fix: remove those entries from `PATH` where it is set — a
+shell profile, or the environment variables on Windows. The row reads the Bash tool's `PATH`, which
+can differ from the one Claude Code itself has.
 
 ## 2. Tools
 

@@ -248,9 +248,11 @@ entries, and git runs with `core.fsmonitor` off.
 
 One lookup is out of the plugin's reach. `hooks/hooks.json` starts the launcher as `bash`, and
 Claude Code looks that name up on `PATH`, in the session's directory, before any plugin code runs.
-If your `PATH` has an empty or relative entry (a trailing `:`, or `.`),
+If your `PATH` has an empty or relative entry (`.`, a leading `:`, a `::`) ahead of bash's own
+directory, or anywhere on a machine without bash,
 a program planted in the working directory could run in place of bash, node or git.
-`/github-workflow:doctor` shows a `PATH  warning` row naming such entries; remove them from `PATH`.
+`/github-workflow:doctor` shows a `PATH  warning` row naming every empty or relative entry; remove
+them from `PATH`.
 
 ## Troubleshooting
 
