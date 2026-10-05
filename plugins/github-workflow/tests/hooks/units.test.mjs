@@ -326,6 +326,68 @@ describe("findGhTarget — where the gh command sits", () => {
   });
 });
 
+describe("findGhTargets — GH_REPO set earlier in the command", () => {
+  const repoOf = (cmd) => findGhTarget(cmd).envRepo;
+  const unknown = (cmd) => findGhTarget(cmd).envRepoUnknown;
+
+  test("export and a bare assignment reach a later gh", () => {
+    assert.equal(repoOf(`export GH_REPO=o/r; gh issue create -b x`), "o/r");
+    assert.equal(repoOf(`export A=1 "GH_REPO=o/r" && gh issue create -b x`), "o/r");
+    assert.equal(repoOf(`GH_REPO=o/r; gh issue create -b x`), "o/r");
+    assert.equal(repoOf(`A=1 GH_REPO=o/r\ngh issue create -b x`), "o/r");
+    assert.equal(repoOf(`export GH_REPO=; gh issue create -b x`), "", "empty: none");
+  });
+
+  test("a prefix on another command is that command's alone; gh's own prefix wins", () => {
+    assert.equal(repoOf(`GH_REPO=o/r true; gh issue create -b x`), null);
+    assert.equal(repoOf(`export GH_REPO=a/b; GH_REPO=c/d gh issue create -b x`), "c/d");
+    assert.equal(repoOf(`gh issue create -b "GH_REPO=o/r"`), null);
+  });
+
+  test("unset and export -n clear it; unset -f does not", () => {
+    assert.equal(repoOf(`export GH_REPO=o/r; unset GH_REPO; gh issue create -b x`), "");
+    assert.equal(repoOf(`unset -v A GH_REPO && gh issue create -b x`), "");
+    assert.equal(repoOf(`export -n GH_REPO; gh issue create -b x`), "");
+    assert.equal(repoOf(`unset -f GH_REPO; gh issue create -b x`), null);
+  });
+
+  test("declare and typeset as export does; +x clears; a nameref or an append is unknown", () => {
+    assert.equal(repoOf(`declare -x GH_REPO=o/r; gh issue create -b x`), "o/r");
+    assert.equal(repoOf(`typeset -gx GH_REPO=o/r; gh issue create -b x`), "o/r");
+    assert.equal(repoOf(`declare GH_REPO=o/r; gh issue create -b x`), "o/r", "as a bare assignment");
+    assert.equal(repoOf(`export GH_REPO=o/r; declare +x GH_REPO; gh issue create -b x`), "");
+    assert.equal(repoOf(`declare -f GH_REPO; gh issue create -b x`), null);
+    assert.equal(unknown(`declare -n GH_REPO=OTHER; gh issue create -b x`), true);
+    assert.equal(unknown(`GH_REPO+=/x; gh issue create -b x`), true);
+    assert.equal(unknown(`export GH_REPO+=/x; gh issue create -b x`), true);
+    assert.equal(unknown(`A+=1; gh issue create -b x`), false);
+  });
+
+  test("scoped like cd: a subshell's is undone, a command substitution inherits", () => {
+    assert.equal(repoOf(`(export GH_REPO=o/r) && gh issue create -b x`), null);
+    assert.equal(repoOf(`(export GH_REPO=o/r && gh issue create -b x)`), "o/r");
+    assert.equal(repoOf(`export GH_REPO=o/r; N=$(gh issue create -b x)`), "o/r");
+    assert.equal(repoOf(`N=$(export GH_REPO=o/r); gh issue create -b x`), null);
+    assert.equal(repoOf(`GH_REPO=$(gh issue create -b x)`), null, "set only after gh has run");
+  });
+
+  test("each gh sees what came before it", () => {
+    const all = findGhTargets(`gh issue create -b x; export GH_REPO=o/r; gh pr create -b y; unset GH_REPO; gh pr edit 1`);
+    assert.deepEqual(all.map((f) => f.envRepo), [null, "o/r", ""]);
+  });
+
+  test("a value the shell expands is unknown, until a literal one replaces it", () => {
+    assert.equal(unknown(`export GH_REPO="$R"; gh issue create -b x`), true);
+    assert.equal(unknown(`GH_REPO="$(cat f)"; gh issue create -b x`), true);
+    assert.equal(unknown(`GH_REPO=$R gh issue create -b x`), true);
+    assert.equal(unknown(`export $(cat .env | xargs); gh issue create -b x`), true);
+    assert.equal(unknown(`unset $V; gh issue create -b x`), true);
+    assert.equal(unknown(`export GH_REPO=$R; export GH_REPO=o/r; gh issue create -b x`), false);
+    assert.equal(unknown(`export A="$R"; gh issue create -b x`), false, "another variable");
+    assert.equal(unknown(`gh issue create -b x`), false);
+  });
+});
+
 describe("argValue", () => {
   test("reads the space-separated form", () => {
     assert.equal(argValue(["--body", "x"], ["--body", "-b"]), "x");
@@ -1428,6 +1490,25 @@ describe("checkoutAt and headBranch", () => {
     assert.deepEqual(defaultCandidates(wt), ["develop"]);
   });
 
+  // A reftable repository keeps origin/HEAD in the reftable: `ask` (git) answers there.
+  test("a reftable repository's candidates come from ask, read from extensions.refStorage as git does", () => {
+    const reftableBy = (config) => {
+      const git = temp("co");
+      writeFileSync(join(git, "config"), config);
+      return defaultCandidates(git, () => ["develop"])[0] === "develop";
+    };
+    assert.equal(reftableBy("[extensions]\n\trefStorage = reftable\n"), true);
+    assert.equal(reftableBy("[extensions] refStorage = reftable\n"), true, "on the header's line");
+    assert.equal(reftableBy("[Extensions]\n\tRefStorage = Reftable ; a comment\n"), true, "any case");
+    assert.equal(reftableBy("[extensions]\n\trefStorage = files\n\trefStorage = reftable\n"), true, "the last wins");
+    assert.equal(reftableBy("[extensions]\n\trefStorage = reftable\n\trefStorage = files\n"), false);
+    assert.equal(reftableBy("[core]\n\trefStorage = reftable\n"), false, "another section");
+    assert.equal(reftableBy("[extensions]\n\tobjectFormat = sha1\n"), false);
+    const git = temp("co");
+    writeFileSync(join(git, "config"), "[extensions]\n\trefStorage = reftable\n");
+    assert.deepEqual(defaultCandidates(git), ["main", "master"], "no ask: main and master");
+  });
+
   test("the branch HEAD names, and none when detached or unreadable", () => {
     const d = temp("co");
     writeFileSync(join(d, "HEAD"), "ref: refs/heads/feat/x\n");
@@ -1447,6 +1528,29 @@ describe("selfCheck — the ask gates without git", () => {
     const rows = Object.fromEntries(selfCheck(d, { PATH: "" }).map((r) => [r.name, r]));
     assert.deepEqual(rows["branch gate"], { name: "branch gate", ready: false, note: "git not found" });
     assert.deepEqual(rows["discard gate"], { name: "discard gate", ready: false, note: "git not found" });
+  });
+});
+
+describe("selfCheck — PATH entries that name the working directory", () => {
+  const row = (path, platform) =>
+    selfCheck(temp("co"), { PATH: path }, LINTER, platform).find((r) => r.name === "PATH");
+
+  test("POSIX: an empty or relative entry is a warning that names it", () => {
+    const r = row("/usr/bin::bin:/bin:", "linux");
+    assert.equal(r.ready, true, "a warning, not a gate that is down");
+    assert.equal(r.warning, true);
+    assert.match(r.note, /an empty entry/);
+    assert.match(r.note, /"bin"/);
+    assert.match(r.note, /a program planted in the working directory could run in place of bash, node or git/);
+    assert.deepEqual(row("/usr/bin:/bin", "linux"), { name: "PATH", ready: true, note: "absolute entries only" });
+  });
+
+  test("Windows: a relative entry warns; an empty one does not, as Git Bash drops it", () => {
+    const r = row("C:\\Windows;.;tools", "win32");
+    assert.equal(r.warning, true);
+    assert.match(r.note, /"\."/);
+    assert.match(r.note, /"tools"/);
+    assert.equal(row("C:\\Windows;;C:\\Tools;", "win32").warning, undefined);
   });
 });
 
@@ -1481,5 +1585,50 @@ describe("branchExists", () => {
     assert.equal(branchExists(git, "feat"), false, "a directory of refs is not a branch");
     assert.equal(branchExists(git, "lib"), false);
     assert.equal(branchExists(git, "../x"), false);
+  });
+
+  test("the files backend is read from disk; git never runs", () => {
+    const git = temp("refs");
+    mkdirSync(join(git, "refs", "heads"), { recursive: true });
+    writeFileSync(join(git, "refs", "heads", "main"), "0\n");
+    writeFileSync(join(git, "config"), "[core]\n\trepositoryformatversion = 1\n[extensions]\n\tobjectFormat = sha1\n");
+    const probe = { git: () => assert.fail("git must not run"), root: git };
+    assert.equal(branchExists(git, "main", probe), true);
+    assert.equal(branchExists(git, "other", probe), false);
+  });
+
+  // `git init --ref-format=reftable` needs git 2.45 or later.
+  const reftableSkip = !gitAvailable
+    ? "git not found"
+    : spawnSync("git", ["init", "-q", "--ref-format=reftable", temp("probe")]).status === 0
+      ? false
+      : `${spawnSync("git", ["--version"], { encoding: "utf8" }).stdout.trim()} cannot create a reftable repository (needs git 2.45 or later)`;
+
+  test("a reftable repository has no ref files: git show-ref answers", { skip: reftableSkip }, () => {
+    const d = temp("reftable");
+    const run = (...args) => spawnSync("git", args, { cwd: d, encoding: "utf8" });
+    run("init", "-q", "--ref-format=reftable", "-b", "main");
+    run("-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false",
+      "commit", "-q", "--allow-empty", "--no-verify", "-m", "seed");
+    run("branch", "feat/x");
+    run("update-ref", "refs/remotes/origin/remote-only", "HEAD");
+    const gitDir = join(d, ".git");
+    const probe = { git: () => resolveExecutable("git"), root: d };
+
+    assert.equal(branchExists(gitDir, "main", probe), true);
+    assert.equal(branchExists(gitDir, "feat/x", probe), true);
+    assert.equal(branchExists(gitDir, "remote-only", probe), true);
+    assert.equal(branchExists(gitDir, "feat", probe), false);
+    assert.equal(branchExists(gitDir, "-h", probe), false);
+    assert.equal(branchExists(gitDir, "main"), false, "no git: unknown, which passes");
+    assert.equal(branchExists(gitDir, "main", { ...probe, git: () => null }), false);
+    assert.equal(branchExists(gitDir, "main", { ...probe, time: makeBudget(0) }), false, "past the deadline");
+
+    // One command asks about the same name twice (discard form, then switch target): git runs once.
+    let runs = 0;
+    const cached = { git: () => (runs++, resolveExecutable("git")), root: d, cache: new Map() };
+    assert.equal(branchExists(gitDir, "feat/x", cached), true);
+    assert.equal(branchExists(gitDir, "feat/x", cached), true);
+    assert.equal(runs, 1);
   });
 });

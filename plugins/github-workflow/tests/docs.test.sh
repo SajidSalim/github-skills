@@ -419,10 +419,21 @@ test_the_readme_states_the_ask_gates_limits() {
 test_the_plugin_readme_covers_the_essentials() {
   local doc h; doc=$(cat "$PLUGIN_ROOT/README.md")
   for h in "## Install" "## Quick start" "## Requirements" "## Modes" "## Gates" "## Configuration" \
-           "## Commands" "## Using it with other agents" "## Troubleshooting" "## Token cost" \
+           "## Commands" "## Using it with other agents" "## Security" "## Troubleshooting" "## Token cost" \
            "## Running the tests" "## License"; do
     assert_contains "$doc" "$h"
   done
+}
+
+# hooks.json starts the launcher as `bash`, a name the host resolves before the plugin runs: the
+# residual risk of an empty or relative PATH entry is stated, and doctor shows the row for it.
+test_the_bare_bash_launch_risk_is_documented() {
+  local s
+  for s in "a program planted in the working directory could run in place of bash, node or git" \
+           "PATH  warning"; do
+    assert_contains "$(cat "$PLUGIN_ROOT/README.md")" "$s"
+  done
+  assert_contains "$(cat "$PLUGIN_ROOT/skills/doctor/SKILL.md")" "The \`PATH\` row reads \`warning\`"
 }
 
 test_the_marketplace_readme_has_the_install_commands() {

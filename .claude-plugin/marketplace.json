@@ -7,7 +7,7 @@
       "name": "github-workflow",
       "source": "./plugins/github-workflow",
       "description": "A disciplined issue-to-PR workflow for coding agents on GitHub: search for duplicates before filing, claim via the comment thread, branch and PR without merging, label to a strict taxonomy, and close with a written record — with opt-in hooks that enforce it.",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "category": "development",
       "tags": ["github", "issues", "pull-requests", "labels", "triage", "project-board", "workflow"]
     }

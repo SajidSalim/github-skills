@@ -16,7 +16,7 @@ import {
   mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync, copyFileSync, symlinkSync, existsSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
+import { join, dirname, delimiter } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HOOK = fileURLToPath(new URL("../../hooks/check-issue-workflow.mjs", import.meta.url));
@@ -942,6 +942,49 @@ describe("--repo", () => {
     assert.equal(runHook(pre(cmd, repoDir(ADOPTED)), { env: { GH_REPO: "acme/other" } }).status, 2);
   });
 
+  // GH_REPO exported or assigned earlier in the same command reaches gh, as a cd does.
+  test("GH_REPO set earlier in the command names the repository", () => {
+    const dir = repoDir(ADOPTED);
+    const create = `gh issue create --title x --body plain`;
+    assert.equal(runHook(pre(`export GH_REPO=acme/other; ${create}`, dir)).status, 0);
+    assert.equal(runHook(pre(`GH_REPO=acme/other && ${create}`, dir)).status, 0);
+    assert.equal(runHook(pre(`export GH_REPO=acme/shop && ${create}`, dir)).status, 2);
+    assert.equal(runHook(pre(`(export GH_REPO=acme/other) && ${create}`, dir)).status, 2, "a subshell's is undone");
+    assert.equal(runHook(pre(`GH_REPO=acme/other true; ${create}`, dir)).status, 2, "a prefix is that command's alone");
+  });
+
+  test("declare -x GH_REPO counts as export does", () => {
+    const dir = repoDir(ADOPTED);
+    assert.equal(runHook(pre(`declare -x GH_REPO=acme/other; gh issue create --title x --body plain`, dir)).status, 0);
+  });
+
+  // gh repo view, which the linter uses, honours GH_REPO: once the command clears it, so must the linter.
+  test("after unset GH_REPO, the linter does not inherit the cleared GH_REPO", { skip: !bashAvailable }, () => {
+    const dir = repoDir(ADOPTED);
+    runHook(post(`unset GH_REPO; gh issue edit 42 --add-label type:chore`, "", dir), {
+      hook: pluginTree('printf "%s|%s" "${GH_REPO-unset}" "$*" > args.txt\nexit 0\n'),
+      env: { GH_REPO: "acme/other" },
+    });
+    assert.equal(readFileSync(join(dir, "args.txt"), "utf8"), "unset|42");
+  });
+
+  test("unset GH_REPO clears it, an inherited one too", () => {
+    const dir = repoDir(ADOPTED);
+    const create = `gh issue create --title x --body plain`;
+    assert.equal(runHook(pre(`export GH_REPO=acme/other; unset GH_REPO; ${create}`, dir)).status, 2);
+    assert.equal(runHook(pre(`unset GH_REPO && ${create}`, dir), { env: { GH_REPO: "acme/other" } }).status, 2);
+  });
+
+  test("a GH_REPO the shell expands is unknown: guest, unless --repo names the repository", () => {
+    const dir = repoDir(ADOPTED);
+    assert.equal(runHook(pre(`export GH_REPO="$TARGET"; gh issue create --title x --body plain`, dir)).status, 0);
+    assert.equal(runHook(pre(`GH_REPO=$(cat repo.txt); gh issue create --title x --body plain`, dir)).status, 0);
+    assert.equal(
+      runHook(pre(`export GH_REPO="$TARGET"; gh issue create --repo acme/shop --title x --body plain`, dir)).status,
+      2,
+    );
+  });
+
   test("a config that names no repo cannot vouch for --repo", () => {
     const cmd = `gh issue create --repo acme/shop --title x --body plain`;
     assert.equal(runHook(pre(cmd, repoDir({ version: 1 }))).status, 0);
@@ -1100,6 +1143,19 @@ describe("self-check", () => {
     assert.match(option.stdout, /discard gate\s+ready\s+off -- plugin option discard_gate/);
     const off = repoDir({ ...ADOPTED, gates: { discardChanges: false } });
     assert.match(selfCheck(hook, off).stdout, /discard gate\s+ready\s+off -- repo config/);
+  });
+
+  // hooks.json starts the launcher as `bash`, a name the host looks up on PATH before any of the
+  // plugin's code runs. A relative entry there is the user's to fix, so the self-check shows it.
+  test("a relative PATH entry is a warning that names it, and still exits 0 when all is ready", () => {
+    const key = Object.keys(process.env).find((k) => /^path$/i.test(k)) ?? "PATH";
+    const hook = pluginTree("exit 0\n");
+    const clean = selfCheck(hook, temp("guest"));
+    assert.match(clean.stdout, /PATH\s+ready\s+absolute entries only/);
+    const r = selfCheck(hook, temp("guest"), { [key]: `${process.env[key]}${delimiter}tools` });
+    assert.match(r.stdout, /PATH\s+warning\s+.*"tools"/);
+    assert.match(r.stdout, /a program planted in the working directory could run in place of bash, node or git/);
+    assert.equal(r.status, clean.status, "a warning does not fail the self-check");
   });
 });
 
@@ -1501,11 +1557,15 @@ describe("PreToolUse — branch gate, edits", { skip: !gitAvailable }, () => {
 });
 
 // A reftable repository's .git/HEAD always reads `ref: refs/heads/.invalid`; the branch is in the
-// reftable, so only git can say. reftable is planned as git 3.0's default.
-const reftableAvailable =
-  gitAvailable && gitIn(temp("reftable-probe"), "init", "-q", "--ref-format=reftable").status === 0;
+// reftable, so only git can say. reftable is planned as git 3.0's default. `git init
+// --ref-format=reftable` needs git 2.45 or later; an older git skips these tests, saying why.
+const reftableSkip = !gitAvailable
+  ? "git not found"
+  : gitIn(temp("reftable-probe"), "init", "-q", "--ref-format=reftable").status === 0
+    ? false
+    : `${gitIn(tmpdir(), "--version").stdout.trim()} cannot create a reftable repository (needs git 2.45 or later)`;
 
-describe("PreToolUse — branch gate, reftable", { skip: !reftableAvailable }, () => {
+describe("PreToolUse — branch gate, reftable", { skip: reftableSkip }, () => {
   const reftableRepo = () => {
     const dir = temp("reftable");
     gitIn(dir, "init", "-q", "--ref-format=reftable", "-b", "main");
@@ -1536,6 +1596,41 @@ describe("PreToolUse — branch gate, reftable", { skip: !reftableAvailable }, (
     const dir = reftableRepo();
     gitIn(dir, "checkout", "-q", "-b", "feature");
     passes(runHook(pre("git commit -m x", dir)));
+  });
+
+  // A reftable repository has no loose ref files to read, so git is asked whether `main` exists.
+  test("switching to main earlier in the same command is followed", () => {
+    const dir = reftableRepo();
+    gitIn(dir, "checkout", "-q", "-b", "feature");
+    assert.match(askOf(runHook(pre("git checkout main && git commit -m x", dir))), /run git commit on main/);
+    assert.match(askOf(runHook(pre("git switch main && git push", dir))), /push to main/);
+    passes(runHook(pre("git checkout -b fix/x && git commit -m x", dir)));
+    passes(runHook(pre("git checkout nope && git commit -m x", dir)));
+  });
+
+  // origin/HEAD lives in the reftable too, so a default branch other than main or master is asked
+  // of git as well.
+  test("a default branch named by origin/HEAD, here develop, asks", () => {
+    const dir = reftableRepo();
+    gitIn(dir, "update-ref", "refs/remotes/origin/develop", "HEAD");
+    gitIn(dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop");
+    gitIn(dir, "checkout", "-q", "-b", "develop");
+    assert.match(askOf(runHook(pre("git commit -m x", dir))), /run git commit on develop/);
+    const r = runHook({
+      hook_event_name: "PreToolUse", tool_name: "Edit", cwd: dir,
+      tool_input: { file_path: join(dir, "lib", "a.txt"), old_string: "a", new_string: "b" },
+    });
+    assert.match(askOf(r), /edit lib\/a\.txt on develop/);
+    gitIn(dir, "checkout", "-q", "-b", "feature");
+    assert.match(askOf(runHook(pre("git checkout develop && git commit -m x", dir))), /run git commit on develop/);
+    passes(runHook(pre("git checkout main && git commit -m x", dir)));
+  });
+
+  test("a branch that shares its name with a directory is a branch switch, not a discard", () => {
+    const dir = reftableRepo();
+    gitIn(dir, "branch", "lib");
+    write(dir, "lib/a.txt");
+    passes(runHook(pre("git checkout lib", dir)));
   });
 });
 
