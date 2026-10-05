@@ -2459,11 +2459,11 @@ function postToolUse({ kind, action, args, cwd, adopted, gates, payload, repo })
  * handing out the pre-install copy across an app restart. Copying the binary into a directory
  * already on PATH fixes it; so does logging out.
  */
-export function selfCheck(cwd = process.cwd(), env = process.env, linter = LINTER) {
+export function selfCheck(cwd = process.cwd(), env = process.env, linter = LINTER, platform = process.platform) {
   // Resolved, not spawned by bare name -- see resolveExecutable. The `command -v` probe below
   // stays a string: bash's own lookup does not search the working directory.
-  const bash = resolveExecutable("bash", env);
-  const git = resolveExecutable("git", env);
+  const bash = resolveExecutable("bash", env, platform);
+  const git = resolveExecutable("git", env, platform);
   const bashOk = bash !== null && spawnSync(bash, ["-c", "exit 0"]).error === undefined;
   const has = (c) => bashOk && spawnSync(bash, ["-c", `command -v ${c}`]).status === 0;
   const gitOk = git !== null && spawnSync(git, ["--version"]).error === undefined;
@@ -2476,6 +2476,7 @@ export function selfCheck(cwd = process.cwd(), env = process.env, linter = LINTE
 
   return [
     { name: "node", ready: true, note: process.version },
+    pathRow(env, platform),
     {
       name: "mode",
       ready: !context.error,
@@ -2552,6 +2553,35 @@ export function selfCheck(cwd = process.cwd(), env = process.env, linter = LINTE
   ];
 }
 
+/**
+ * The self-check's PATH row: a warning naming each entry that resolves against the working
+ * directory. hooks.json starts the launcher as `bash`, and the host looks that name up on PATH
+ * before any of the plugin's code runs, so the hook cannot guard it: an empty or relative entry
+ * would let a program in the repository run in its place. The hook itself and run-hook.sh skip
+ * such entries for node, git and bash. On Windows an empty entry is left out: Git Bash, which runs
+ * the hooks there, drops it when it converts PATH, while a relative one, `.` included, survives.
+ */
+function pathRow(env, platform) {
+  const path = env?.PATH ?? env?.Path;
+  const entries = typeof path === "string" ? path.split(platform === "win32" ? ";" : ":") : [];
+  const named = [];
+  for (const e of entries) {
+    if (platform === "win32" && e === "") continue;
+    if (absoluteEntry(e, platform) !== null) continue;
+    const label = e === "" ? "an empty entry" : JSON.stringify(e);
+    if (!named.includes(label)) named.push(label);
+  }
+  if (named.length === 0) return { name: "PATH", ready: true, note: "absolute entries only" };
+  return {
+    name: "PATH",
+    ready: true,
+    warning: true,
+    note:
+      `relative to the working directory: ${named.join(", ")} -- a program planted in the working ` +
+      "directory could run in place of bash, node or git; remove these entries from PATH",
+  };
+}
+
 // ---------------------------------------------------------------- main
 
 async function main() {
@@ -2561,7 +2591,7 @@ async function main() {
     const rows = selfCheck(argValue(argv, ["--cwd"]) ?? process.cwd());
     for (const r of rows) {
       process.stdout.write(
-        `  ${r.name.padEnd(16)}${(r.ready ? "ready" : "NOT RUNNING").padEnd(14)}${r.note}\n`,
+        `  ${r.name.padEnd(16)}${(!r.ready ? "NOT RUNNING" : r.warning ? "warning" : "ready").padEnd(14)}${r.note}\n`,
       );
     }
     process.exit(rows.every((r) => r.ready) ? 0 : 1);

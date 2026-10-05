@@ -16,7 +16,7 @@ import {
   mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync, copyFileSync, symlinkSync, existsSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
+import { join, dirname, delimiter } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HOOK = fileURLToPath(new URL("../../hooks/check-issue-workflow.mjs", import.meta.url));
@@ -1128,6 +1128,19 @@ describe("self-check", () => {
     assert.match(option.stdout, /discard gate\s+ready\s+off -- plugin option discard_gate/);
     const off = repoDir({ ...ADOPTED, gates: { discardChanges: false } });
     assert.match(selfCheck(hook, off).stdout, /discard gate\s+ready\s+off -- repo config/);
+  });
+
+  // hooks.json starts the launcher as `bash`, a name the host looks up on PATH before any of the
+  // plugin's code runs. A relative entry there is the user's to fix, so the self-check shows it.
+  test("a relative PATH entry is a warning that names it, and still exits 0 when all is ready", () => {
+    const key = Object.keys(process.env).find((k) => /^path$/i.test(k)) ?? "PATH";
+    const hook = pluginTree("exit 0\n");
+    const clean = selfCheck(hook, temp("guest"));
+    assert.match(clean.stdout, /PATH\s+ready\s+absolute entries only/);
+    const r = selfCheck(hook, temp("guest"), { [key]: `${process.env[key]}${delimiter}tools` });
+    assert.match(r.stdout, /PATH\s+warning\s+.*"tools"/);
+    assert.match(r.stdout, /a program planted in the working directory could run in place of bash, node or git/);
+    assert.equal(r.status, clean.status, "a warning does not fail the self-check");
   });
 });
 

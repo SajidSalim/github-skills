@@ -238,6 +238,18 @@ and every human who works in it — Codex, Cursor, Copilot, CI:
 The issue forms and the PR template work for everyone anyway. The hooks are Claude Code only:
 other agents follow the protocol because their instructions say so, not because a gate checks it.
 
+## Security
+
+The hooks run in whatever repository you open, before you approve anything, so they never run a
+program from it. The launcher and the hook find `node`, `git` and `bash` only in absolute `PATH`
+entries, and git runs with `core.fsmonitor` off.
+
+One lookup is out of the plugin's reach. `hooks/hooks.json` starts the launcher as `bash`, and
+Claude Code looks that name up on `PATH`, in the session's directory, before any plugin code runs.
+If your `PATH` has an empty or relative entry (a trailing `:`, or `.`),
+a program planted in the working directory could run in place of bash, node or git.
+`/github-workflow:doctor` shows a `PATH  warning` row naming such entries; remove them from `PATH`.
+
 ## Troubleshooting
 
 | Symptom | Cause and fix |
@@ -246,6 +258,7 @@ other agents follow the protocol because their instructions say so, not because 
 | A `gh issue create` without `Searched:` went through | Only adopted repositories have that gate. Run `/github-workflow:doctor` to see the mode; a `--repo` naming another repository, or a body the hook cannot read (see [Gates](#gates)), is not checked |
 | `taxonomy check  NOT RUNNING` with `not on PATH: jq` | Until it is fixed the taxonomy gate passes silently. Install `jq` ≥ 1.6. On Windows, if `jq` was installed with winget and is still not found, Claude Code inherited a `PATH` from before the install, and restarting the editor usually does not fix it: copy `jq.exe` into a directory already on `PATH`, e.g. `cp "$LOCALAPPDATA/Microsoft/WinGet/Packages/jqlang.jq_"*/jq.exe ~/bin/` when `~/bin` is on it |
 | `bash not found` or `git not found` in the self-check | The hook only runs `bash` and `git` from absolute `PATH` entries, never from the working directory or a relative entry. Put their directory on `PATH` as an absolute path |
+| `PATH  warning  relative to the working directory: …` in the self-check | `PATH` has an empty or relative entry, so a program in the repository could run in place of `bash` when Claude Code starts the hook (see [Security](#security)). Remove the named entries from `PATH` |
 | `invalid issue format: "208\r"` | CRLF from the Windows `jq` build: every captured value but the last ends in a carriage return. Pipe the capture through `tr -d '\r'` |
 | `missing required scopes [read:project]` | The token cannot read Projects boards — this is **not** "no board". Run `gh auth refresh -s read:project` (or `-s project` to move cards) |
 | `Permission denied` running a script | Git on Windows does not record the executable bit. Run scripts as `bash <path>`, never `./<path>` |

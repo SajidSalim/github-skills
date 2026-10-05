@@ -1500,6 +1500,29 @@ describe("selfCheck — the ask gates without git", () => {
   });
 });
 
+describe("selfCheck — PATH entries that name the working directory", () => {
+  const row = (path, platform) =>
+    selfCheck(temp("co"), { PATH: path }, LINTER, platform).find((r) => r.name === "PATH");
+
+  test("POSIX: an empty or relative entry is a warning that names it", () => {
+    const r = row("/usr/bin::bin:/bin:", "linux");
+    assert.equal(r.ready, true, "a warning, not a gate that is down");
+    assert.equal(r.warning, true);
+    assert.match(r.note, /an empty entry/);
+    assert.match(r.note, /"bin"/);
+    assert.match(r.note, /a program planted in the working directory could run in place of bash, node or git/);
+    assert.deepEqual(row("/usr/bin:/bin", "linux"), { name: "PATH", ready: true, note: "absolute entries only" });
+  });
+
+  test("Windows: a relative entry warns; an empty one does not, as Git Bash drops it", () => {
+    const r = row("C:\\Windows;.;tools", "win32");
+    assert.equal(r.warning, true);
+    assert.match(r.note, /"\."/);
+    assert.match(r.note, /"tools"/);
+    assert.equal(row("C:\\Windows;;C:\\Tools;", "win32").warning, undefined);
+  });
+});
+
 describe("gitCommands — review round 1", () => {
   const subs = (cmd, cwd = temp("cmd")) => gitCommands(cmd, cwd).map((g) => g.sub);
 
