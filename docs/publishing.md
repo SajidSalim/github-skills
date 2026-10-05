@@ -59,7 +59,8 @@ The directory lists plugins across claude.ai, Cowork and Claude Code.
 
 ### Reviewer notes
 
-The validator holds two things for a human reviewer, by design. Paste this with the submission:
+The validator holds three things for a human reviewer, by design, and warns about prose that
+names a shell. Paste this with the submission:
 
 > **Credentials.** The plugin never reads, stores, prints or forwards a GitHub token. All GitHub
 > access goes through the user's own `gh` CLI, which keeps its credential in the OS keyring;
@@ -72,10 +73,19 @@ The validator holds two things for a human reviewer, by design. Paste this with 
 >
 > **Hook launcher.** `hooks/hooks.json` runs `hooks/run-hook.sh` by literal path under
 > `${CLAUDE_PLUGIN_ROOT}`, with `/bin/sh` by absolute path, so nothing is looked up on `PATH` to
-> start it; each hook sets `"shell": "bash"`, so Windows never runs it under PowerShell. The launcher is POSIX sh and looks for `node` on absolute `PATH` entries only, so a
-> `node` file committed to a repository is never run, and executes the bundled
+> start it; each hook sets `"shell": "bash"`, so Windows never runs it under PowerShell. The
+> launcher is POSIX sh. It looks for `node` on absolute `PATH` entries only, so a `node` file
+> committed to a repository is never run, and executes the bundled
 > `hooks/check-issue-workflow.mjs`; without Node it exits 0. The hook is a single file with no
 > dependencies beyond Node's built-ins. It makes no network requests, installs nothing, runs no
 > `npx` or `uvx`, and writes no files. It spawns only read-only `git` queries (`symbolic-ref`,
-> `status`, `stash list`, `diff --name-only`, `check-ignore`, with `core.fsmonitor` disabled) and `bash` for the
-> label linter above. Its gates block a command or ask the user; they never change anything.
+> `show-ref --verify`, `status`, `stash list`, `diff --name-only`, `check-ignore`, `--version`,
+> with `core.fsmonitor` disabled), `cygpath -w` on Windows, `bash` for the label linter above,
+> and, in the self-check only, `bash -c "command -v gh"` (and `jq`) to report missing tools. Its
+> gates block a command or ask the user; they never change anything.
+>
+> **Icon.** Nothing runs `.claude-plugin/icon.png`; it is the directory listing icon.
+>
+> **Download-and-run warnings** (`CHANGELOG.md`, `README.md`, `hooks/check-issue-workflow.mjs`).
+> These are prose and a code comment explaining why the launcher starts as `/bin/sh` by absolute
+> path. Nothing in the plugin downloads code: no `curl`, `wget` or package launcher appears in it.

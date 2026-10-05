@@ -75,9 +75,8 @@ is the first version that guarantees them.
 - The self-check, and so `/github-workflow:doctor`, has a `PATH` row that warns about an empty or
   relative entry: Claude Code looks up `bash` for the hook there before any plugin code runs. The
   README gains a Security section (#24).
-- A 1024px icon, `.claude-plugin/icon.png`, for the plugin directory listing; the docs test no
-  longer `eval`s the pipeline it reads from the setup skill, which the directory validator flagged
-  (#28).
+- A 1024px icon for the plugin directory listing; the docs test no longer `eval`s the pipeline it
+  reads from the setup skill, which the directory validator flagged (#28).
 - `docs/publishing.md` runs setup and doctor live before a release (#22).
 
 ### Changed
